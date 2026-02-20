@@ -10,15 +10,15 @@ For full architecture, algorithms, API contracts, and technical decisions, see [
 
 ## Commands
 
-| Task | Command |
-|------|---------|
-| Dev server (Turbopack) | `npm run dev` |
-| Production build | `npm run build` |
-| Lint | `npm run lint` |
-| Format (write) | `npm run format` |
-| Format (check only) | `npm run format:check` |
-| Run tests | `npm test` |
-| Run tests (watch) | `npm run test:watch` |
+| Task                   | Command                |
+| ---------------------- | ---------------------- |
+| Dev server (Turbopack) | `npm run dev`          |
+| Production build       | `npm run build`        |
+| Lint                   | `npm run lint`         |
+| Format (write)         | `npm run format`       |
+| Format (check only)    | `npm run format:check` |
+| Run tests              | `npm test`             |
+| Run tests (watch)      | `npm run test:watch`   |
 
 For testing philosophy and conventions, see [docs/test-framework.md](docs/test-framework.md). Tests are co-located with source files (`*.test.ts`). Focus on pure logic in `lib/` — no component tests.
 
@@ -33,12 +33,12 @@ For testing philosophy and conventions, see [docs/test-framework.md](docs/test-f
 
 ## External Services
 
-| Service | Env var |
-|---------|---------|
-| Claude (Anthropic) | `ANTHROPIC_API_KEY` |
-| GraphHopper | `GRAPHHOPPER_API_KEY` |
-| MapTiler | `NEXT_PUBLIC_MAPTILER_API_KEY` |
-| Nominatim (OSM) | None (free, 1 req/sec limit) |
+| Service            | Env var                        |
+| ------------------ | ------------------------------ |
+| Claude (Anthropic) | `ANTHROPIC_API_KEY`            |
+| GraphHopper        | `GRAPHHOPPER_API_KEY`          |
+| MapTiler           | `NEXT_PUBLIC_MAPTILER_API_KEY` |
+| Nominatim (OSM)    | None (free, 1 req/sec limit)   |
 
 ## Code Style
 

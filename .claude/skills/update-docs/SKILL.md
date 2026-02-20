@@ -10,13 +10,13 @@ Scan the Roam codebase and update **all project documentation** so it accurately
 
 These are the files this skill may update. Not every run will touch every file — only update what's actually out of date.
 
-| File | Purpose | Update when… |
-|------|---------|--------------|
-| `docs/technical-overview.md` | Architecture, algorithms, API contracts, data flow, external services | Modules, endpoints, services, or algorithms changed |
-| `docs/design-system.md` | UI tokens, layout rules, component guidelines | New components, tokens, layout patterns, or design conventions changed |
-| `docs/test-framework.md` | Testing philosophy, conventions, patterns | Test tooling, conventions, or coverage expectations changed |
-| `CLAUDE.md` | Project summary, commands, directories, env vars, code style | New commands, directories, env vars, dependencies, or conventions added/removed |
-| `.claude/skills/*/SKILL.md` | Skill definitions for Claude Code | A skill's scope, allowed tools, or instructions need adjustment based on code changes |
+| File                         | Purpose                                                               | Update when…                                                                          |
+| ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `docs/technical-overview.md` | Architecture, algorithms, API contracts, data flow, external services | Modules, endpoints, services, or algorithms changed                                   |
+| `docs/design-system.md`      | UI tokens, layout rules, component guidelines                         | New components, tokens, layout patterns, or design conventions changed                |
+| `docs/test-framework.md`     | Testing philosophy, conventions, patterns                             | Test tooling, conventions, or coverage expectations changed                           |
+| `CLAUDE.md`                  | Project summary, commands, directories, env vars, code style          | New commands, directories, env vars, dependencies, or conventions added/removed       |
+| `.claude/skills/*/SKILL.md`  | Skill definitions for Claude Code                                     | A skill's scope, allowed tools, or instructions need adjustment based on code changes |
 
 **Do NOT touch** `docs/AI_Cycling_Route_App_Project_Overview.md` or anything in `project-overview/` — those are static planning artifacts.
 
@@ -42,6 +42,7 @@ Read every documentation file listed above so you know their current state befor
 For each documentation target, check whether the changes from Step 1 create any discrepancies:
 
 **`docs/technical-overview.md`:**
+
 - New or removed files/modules not reflected
 - Changed API contracts (request/response shapes, endpoints)
 - New or changed external services or environment variables
@@ -50,6 +51,7 @@ For each documentation target, check whether the changes from Step 1 create any 
 - New dependencies that affect the tech stack
 
 **`docs/design-system.md`:**
+
 - New UI components or component behavior changes
 - New or changed design tokens (colors, spacing, typography, shadows, etc.)
 - Layout pattern changes
@@ -57,12 +59,14 @@ For each documentation target, check whether the changes from Step 1 create any 
 - Accessibility updates
 
 **`docs/test-framework.md`:**
+
 - New test utilities or helpers introduced
 - Changed testing conventions or patterns
 - New test categories or coverage expectations
 - Tooling changes (vitest config, test scripts)
 
 **`CLAUDE.md`:**
+
 - New npm scripts or changed commands
 - New directories or changed directory purposes
 - New external services or env vars
@@ -70,6 +74,7 @@ For each documentation target, check whether the changes from Step 1 create any 
 - New or changed documentation files that should be referenced
 
 **`.claude/skills/*/SKILL.md`:**
+
 - Does a skill reference files, patterns, or conventions that changed?
 - Does a skill's allowed-tools list need updating?
 - Does a skill's description need adjusting to match new scope?

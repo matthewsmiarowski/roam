@@ -23,10 +23,7 @@ describe('haversine', () => {
   });
 
   it('is symmetric (a→b equals b→a)', () => {
-    expect(haversine(girona, barcelona)).toBeCloseTo(
-      haversine(barcelona, girona),
-      10,
-    );
+    expect(haversine(girona, barcelona)).toBeCloseTo(haversine(barcelona, girona), 10);
   });
 });
 

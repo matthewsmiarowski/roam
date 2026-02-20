@@ -29,9 +29,7 @@ export function haversine(a: LatLng, b: LatLng): number {
   const dLng = toRad(b.lng - a.lng);
   const sinLat = Math.sin(dLat / 2);
   const sinLng = Math.sin(dLng / 2);
-  const h =
-    sinLat * sinLat +
-    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
+  const h = sinLat * sinLat + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(h));
 }
 
@@ -43,25 +41,20 @@ export function haversine(a: LatLng, b: LatLng): number {
  * @param distanceKm - distance in kilometers
  * @returns the projected point
  */
-export function projectPoint(
-  start: LatLng,
-  bearingDeg: number,
-  distanceKm: number,
-): LatLng {
+export function projectPoint(start: LatLng, bearingDeg: number, distanceKm: number): LatLng {
   const d = distanceKm / EARTH_RADIUS_KM;
   const brng = toRad(bearingDeg);
   const lat1 = toRad(start.lat);
   const lng1 = toRad(start.lng);
 
   const lat2 = Math.asin(
-    Math.sin(lat1) * Math.cos(d) +
-      Math.cos(lat1) * Math.sin(d) * Math.cos(brng),
+    Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng)
   );
   const lng2 =
     lng1 +
     Math.atan2(
       Math.sin(brng) * Math.sin(d) * Math.cos(lat1),
-      Math.cos(d) - Math.sin(lat1) * Math.sin(lat2),
+      Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
     );
 
   return { lat: toDeg(lat2), lng: toDeg(lng2) };

@@ -16,7 +16,7 @@ Tests exist to catch real breakage, not to prove coverage metrics. Every test in
 
 - **React components** — the UI is thin glue between state and libraries (MapLibre, Recharts). Testing that a component renders a `<div>` with the right class is busywork. Visual correctness is verified by looking at the app.
 
-- **External API behavior** — we don't test that GraphHopper returns valid routes or that Claude parses prompts. Those are their problem. We test how *our code* handles their responses.
+- **External API behavior** — we don't test that GraphHopper returns valid routes or that Claude parses prompts. Those are their problem. We test how _our code_ handles their responses.
 
 - **Type correctness** — TypeScript strict mode handles this. Don't write tests that just verify types.
 
@@ -80,16 +80,26 @@ expect(haversine(pointA, pointB)).toBeCloseTo(expectedKm, 1); // 1 decimal place
 
 ### Mocking external services
 
-When testing code that calls external APIs (Claude, GraphHopper, Nominatim), mock at the **boundary** — the function that makes the HTTP call, not deep internals.
+Two patterns, depending on what you're testing:
+
+**Testing an orchestrator** (like the API route) that calls `lib/` modules — mock the modules:
 
 ```typescript
-// Good: mock the whole module that wraps the API
+// Good: mock owned modules when testing the orchestrator that calls them
 vi.mock('@/lib/geocoding', () => ({
   geocode: vi.fn().mockResolvedValue({ lat: 41.9794, lng: 2.8214 }),
 }));
-
-// Bad: mock global fetch and assert on URL construction
 ```
+
+**Testing a `lib/` module** that makes HTTP calls directly — mock `fetch`:
+
+```typescript
+// Good: mock fetch when testing the module that IS the HTTP boundary
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
+```
+
+Don't mock `fetch` when testing code that doesn't call `fetch` directly — mock the module that wraps it instead.
 
 Keep mock data minimal. Don't paste 200-line API responses — build small fixtures with only the fields your code actually reads.
 
@@ -111,12 +121,12 @@ If a fixture is only used in one test file, define it inline in that file.
 
 ## Commands
 
-| Task | Command |
-|------|---------|
-| Run all tests | `npm test` |
-| Run tests in watch mode | `npm run test:watch` |
-| Run a specific file | `npx vitest run lib/geo.test.ts` |
-| Run with coverage | `npx vitest run --coverage` |
+| Task                    | Command                          |
+| ----------------------- | -------------------------------- |
+| Run all tests           | `npm test`                       |
+| Run tests in watch mode | `npm run test:watch`             |
+| Run a specific file     | `npx vitest run lib/geo.test.ts` |
+| Run with coverage       | `npx vitest run --coverage`      |
 
 ---
 
@@ -141,7 +151,7 @@ If a fixture is only used in one test file, define it inline in that file.
 ## Ground rules
 
 1. **No snapshot tests.** They break constantly and nobody reads the diff.
-2. **No mocking what you own.** If you need to mock a module you wrote to test another module you wrote, the design is probably wrong. Refactor instead.
+2. **No mocking internals.** Don't mock private functions or internal details of a module to test that same module. Mocking _other_ modules you own is fine when testing an orchestrator (e.g., mock `lib/geocoding` when testing the API route).
 3. **No test-only code in production modules.** Don't add `if (process.env.NODE_ENV === 'test')` branches or export internals just for testing.
 4. **Tests must be fast.** The full suite should run in under 5 seconds. If a test needs a real network call, it doesn't belong in the unit test suite.
 5. **Fewer, better tests.** 10 well-chosen tests that cover real behavior are worth more than 100 tests that assert implementation details.

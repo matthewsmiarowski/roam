@@ -57,7 +57,7 @@ roam/
 ├── app/
 │   ├── page.tsx                 # Main page — the entire UI
 │   ├── layout.tsx               # Root layout
-│   ├── globals.css              # Tailwind import
+│   ├── globals.css              # Tailwind + design system tokens (CSS custom properties)
 │   └── api/
 │       └── generate-route/
 │           └── route.ts         # POST handler — orchestrates LLM + routing
@@ -97,6 +97,7 @@ Browser → POST /api/generate-route
 **Endpoint:** `POST /api/generate-route`
 
 **Request:**
+
 ```json
 {
   "prompt": "A 60km hilly loop from central Girona on quiet roads",
@@ -108,6 +109,7 @@ Browser → POST /api/generate-route
 ```
 
 **Response:**
+
 ```json
 {
   "route": {
@@ -137,12 +139,12 @@ Errors return `{ status: "error", message: string }`.
 
 ## External Services
 
-| Service | Purpose | Env var | Notes |
-|---------|---------|---------|-------|
-| Claude (claude-sonnet-4-6) | NL → structured params via tool use | `ANTHROPIC_API_KEY` | Server-side only. ~$0.01-0.03 per route. |
-| GraphHopper Directions API | Cycling route computation + elevation | `GRAPHHOPPER_API_KEY` | Server-side only. 500 req/day free tier. Cycling profile, returns 3D coordinates. |
-| MapTiler | Vector map tiles for MapLibre GL | `NEXT_PUBLIC_MAPTILER_API_KEY` | Client-side. 100k tile requests/month free tier. |
-| Nominatim (OpenStreetMap) | Geocoding (location string → lat/lng) | None | Free, rate-limited to 1 req/sec. |
+| Service                    | Purpose                               | Env var                        | Notes                                                                             |
+| -------------------------- | ------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------- |
+| Claude (claude-sonnet-4-6) | NL → structured params via tool use   | `ANTHROPIC_API_KEY`            | Server-side only. ~$0.01-0.03 per route.                                          |
+| GraphHopper Directions API | Cycling route computation + elevation | `GRAPHHOPPER_API_KEY`          | Server-side only. 500 req/day free tier. Cycling profile, returns 3D coordinates. |
+| MapTiler                   | Vector map tiles for MapLibre GL      | `NEXT_PUBLIC_MAPTILER_API_KEY` | Client-side. 100k tile requests/month free tier.                                  |
+| Nominatim (OpenStreetMap)  | Geocoding (location string → lat/lng) | None                           | Free, rate-limited to 1 req/sec.                                                  |
 
 ---
 
@@ -155,18 +157,24 @@ This is the hardest problem in the system. Most routing engines only do A-to-B. 
 The LLM does two jobs in a single tool-use call:
 
 1. **Parameter extraction** — parse the prompt into structured data (start location, target distance, elevation character, road preference)
-2. **Geographic reasoning** — suggest compass bearings for waypoint placement based on terrain knowledge of the area (e.g., knowing hills are north of Girona, not east toward the coast)
+2. **Geographic reasoning** — suggest exactly 3 compass bearings for waypoint placement based on terrain knowledge of the area (e.g., knowing hills are north of Girona, not east toward the coast)
 
 The key insight: we ask for **directions** (compass bearings), not coordinates. The LLM can reason about direction from geographic knowledge. It would hallucinate exact coordinates.
 
+The LLM is also instructed to produce simple, geocoder-friendly location strings ("City, Country" format) rather than overly specific names that Nominatim can't resolve. The Anthropic SDK is configured with `maxRetries: 5` to handle transient 529 overloaded errors.
+
 ### The algorithm
 
-1. Geocode `start_location` → `(lat, lng)`
+1. Geocode `start_location` → `(lat, lng)` (with progressive fallback — see Geocoding below)
 2. Calculate waypoint radius: `radius_km = target_distance_km / (2π × stretch_factor)` where `stretch_factor ≈ 1.3` accounts for roads not being straight lines
-3. Place waypoints: for each bearing in `waypoint_bearings`, project a point at `radius_km` distance from start along that bearing
-4. Route through waypoints via GraphHopper: `start → wp1 → wp2 → ... → wpN → start` using the cycling profile
+3. Place 3 waypoints: for each bearing in `waypoint_bearings`, project a point at `radius_km` distance from start along that bearing (capped at 3 to stay within GraphHopper free tier's 5-point limit: start + 3 waypoints + start)
+4. Route through waypoints via GraphHopper: `start → wp1 → wp2 → wp3 → start` using the cycling profile
 5. Validate total distance: if within ±20% of target, accept. Otherwise adjust radius proportionally and retry (max 3 iterations)
 6. Return the final route geometry, elevation data, and stats
+
+### Geocoding
+
+Nominatim geocoding includes a progressive fallback: if the full location string fails (e.g., "Historic District, Girona, Spain"), it tries progressively simpler versions by stripping leading comma-separated parts ("Girona, Spain", then "Spain"). This handles cases where the LLM generates overly specific location names.
 
 ### Elevation character
 
@@ -199,7 +207,12 @@ No state library. Page-level `useState`/`useReducer` with a discriminated union:
 type AppState =
   | { status: 'idle' }
   | { status: 'loading'; prompt: string }
-  | { status: 'success'; route: RouteData }
+  | {
+      status: 'success';
+      route: RouteData;
+      gpx: string;
+      metadata: GenerateRouteResponse['metadata'];
+    }
   | { status: 'error'; message: string };
 ```
 
@@ -227,30 +240,32 @@ GPX XML is returned inline in the API response. The frontend creates a Blob and 
 
 ## Tech Stack
 
-| Layer | Choice | Rationale |
-|-------|--------|-----------|
-| Framework | Next.js (TypeScript, App Router) | Fullstack in one project. Turbopack for fast dev. |
-| Map | MapLibre GL JS + react-map-gl | Open-source vector tiles (BSD). Smooth zoom, custom styling. |
-| Map tiles | MapTiler | Free tier, clean MapLibre integration. |
-| Elevation chart | Recharts | Lightweight React charting. |
-| LLM | Claude API (claude-sonnet-4-6) | Structured output via tool use. TypeScript SDK. |
-| Routing engine | GraphHopper Directions API | Cycling profile, elevation data, 500 req/day free. |
-| Geocoding | Nominatim (OpenStreetMap) | Free, sufficient for one call per route generation. |
-| Styling | Tailwind CSS v4 | Utility-first, auto-sorted by prettier plugin. |
-| Deployment | Vercel | Push-to-deploy for Next.js. |
+| Layer           | Choice                           | Rationale                                                    |
+| --------------- | -------------------------------- | ------------------------------------------------------------ |
+| Framework       | Next.js (TypeScript, App Router) | Fullstack in one project. Turbopack for fast dev.            |
+| Map             | MapLibre GL JS + react-map-gl    | Open-source vector tiles (BSD). Smooth zoom, custom styling. |
+| Map tiles       | MapTiler                         | Free tier, clean MapLibre integration.                       |
+| Elevation chart | Recharts                         | Lightweight React charting.                                  |
+| LLM             | Claude API (claude-sonnet-4-6)   | Structured output via tool use. TypeScript SDK.              |
+| Routing engine  | GraphHopper Directions API       | Cycling profile, elevation data, 500 req/day free.           |
+| Geocoding       | Nominatim (OpenStreetMap)        | Free, sufficient for one call per route generation.          |
+| Icons           | Lucide React                     | Open source, tree-shakable, consistent stroke style.         |
+| Styling         | Tailwind CSS v4                  | Utility-first, auto-sorted by prettier plugin.               |
+| Deployment      | Vercel                           | Push-to-deploy for Next.js.                                  |
 
 ---
 
 ## Error Handling
 
-| Failure | User message | Server behavior |
-|---------|-------------|-----------------|
-| LLM can't parse prompt | "I couldn't understand that request..." | Log raw prompt and LLM response |
-| Geocoding fails | "I couldn't find that location..." | Log the location string |
-| No route found | "Couldn't generate a route in that area..." | Log waypoints and engine response |
-| Routing engine timeout | "Route generation timed out..." | 30-second timeout on GraphHopper calls |
-| Distance can't converge | Return best attempt with a note | "Route is Xkm — couldn't exactly match your target of Ykm" |
-| API rate limit | "Service is temporarily busy..." | Log for monitoring |
+| Failure                 | User message                                    | Server behavior                                            |
+| ----------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
+| LLM can't parse prompt  | "I couldn't understand that request..."         | Log raw prompt and LLM response                            |
+| Geocoding fails         | "I couldn't find that location..."              | Log the location string; tries simplified variants first   |
+| No route found          | "Couldn't generate a route in that area..."     | Log waypoints and engine response                          |
+| Routing engine timeout  | "Route generation timed out..."                 | 30-second timeout on GraphHopper calls                     |
+| Distance can't converge | Return best attempt with a note                 | "Route is Xkm — couldn't exactly match your target of Ykm" |
+| LLM overloaded (529)    | "The AI service is temporarily busy..."         | Anthropic SDK retries up to 5× with exponential backoff    |
+| API rate limit (429)    | "Service is temporarily busy..."                | Log for monitoring                                         |
 
 ---
 
