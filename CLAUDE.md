@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI-powered cycling route generation. Users describe a ride in natural language, get a rideable cycling route on a map with elevation profile and GPX export. Single Next.js app (TypeScript, App Router) — frontend and API routes in one process.
 
-For full architecture, algorithms, API contracts, and technical decisions, see [docs/technical-overview.md](docs/technical-overview.md).
+For full architecture, algorithms, API contracts, and technical decisions, see [docs/technical-overview.md](docs/technical-overview.md). For UI design tokens, layout rules, and component guidelines, see [docs/design-system.md](docs/design-system.md).
 
 ## Commands
 
@@ -26,7 +26,7 @@ No test framework is configured yet.
 - `app/api/generate-route/route.ts` — Single API endpoint, thin orchestrator
 - `lib/` — Pure TypeScript modules (no framework dependency): LLM, routing, geocoding, GPX, geo math, shared types
 - `components/` — React components
-- `docs/` — Technical overview and product vision
+- `docs/` — Technical overview, design system, and product vision
 - `project-overview/` — PRD and tech plan for v0
 
 ## External Services

@@ -4,7 +4,7 @@
 
 This document describes the architecture, technical decisions, and implementation details of Roam. A new engineer should be able to read this and understand how everything works.
 
-For product vision and long-term roadmap, see [AI_Cycling_Route_App_Project_Overview.md](./AI_Cycling_Route_App_Project_Overview.md). For v0 product requirements, see [../project-overview/v0-plan/PRD.md](../project-overview/v0-plan/PRD.md).
+For product vision and long-term roadmap, see [AI_Cycling_Route_App_Project_Overview.md](./AI_Cycling_Route_App_Project_Overview.md). For v0 product requirements, see [../project-overview/v0-plan/PRD.md](../project-overview/v0-plan/PRD.md). For UI design tokens, color system, typography, layout, and component guidelines, see [design-system.md](./design-system.md).
 
 ---
 
