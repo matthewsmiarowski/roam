@@ -17,8 +17,10 @@ For full architecture, algorithms, API contracts, and technical decisions, see [
 | Lint | `npm run lint` |
 | Format (write) | `npm run format` |
 | Format (check only) | `npm run format:check` |
+| Run tests | `npm test` |
+| Run tests (watch) | `npm run test:watch` |
 
-No test framework is configured yet.
+For testing philosophy and conventions, see [docs/test-framework.md](docs/test-framework.md). Tests are co-located with source files (`*.test.ts`). Focus on pure logic in `lib/` — no component tests.
 
 ## Key Directories
 
@@ -47,4 +49,12 @@ No test framework is configured yet.
 
 ## Documentation Maintenance
 
-After completing changes to the app, evaluate whether [docs/technical-overview.md](docs/technical-overview.md) needs updating. If architecture, API contracts, components, algorithms, or external service usage changed, update that document to reflect what was built, refactored, or removed.
+After completing changes to the app, evaluate whether project documentation needs updating. The `/update-docs` skill handles this — it scans the codebase and updates all relevant docs:
+
+- [docs/technical-overview.md](docs/technical-overview.md) — architecture, algorithms, API contracts, external services
+- [docs/design-system.md](docs/design-system.md) — UI tokens, layout rules, component guidelines
+- [docs/test-framework.md](docs/test-framework.md) — testing philosophy and conventions
+- [CLAUDE.md](CLAUDE.md) — commands, directories, env vars, code style
+- `.claude/skills/*/SKILL.md` — skill definitions
+
+Only document what exists in the code. Don't add speculative features.
