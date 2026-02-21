@@ -4,53 +4,93 @@ import { useEffect, useMemo, useRef } from 'react';
 import Map, { Source, Layer, Marker } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { MapRef } from 'react-map-gl/maplibre';
-import type { RouteData, LatLng } from '@/lib/types';
+import type { RouteOption, LatLng } from '@/lib/types';
 
 interface RouteMapProps {
-  route?: RouteData;
+  /** Multiple route options displayed simultaneously */
+  routes?: RouteOption[];
+  /** Index of route currently hovered in the chat panel */
+  hoveredRouteIndex?: number | null;
+  /** Index of the selected route (detail view) */
+  selectedRouteIndex?: number | null;
   startPoint?: LatLng | null;
   onMapClick?: (lngLat: { lng: number; lat: number }) => void;
   interactive?: boolean;
 }
 
-export function RouteMap({ route, startPoint, onMapClick, interactive }: RouteMapProps) {
-  const mapRef = useRef<MapRef>(null);
+function routeToGeoJSON(geometry: [number, number, number][]) {
+  return {
+    type: 'Feature' as const,
+    geometry: {
+      type: 'LineString' as const,
+      coordinates: geometry.map(([lat, lng, ele]) => [lng, lat, ele]),
+    },
+    properties: {},
+  };
+}
 
-  const geojson = useMemo(() => {
-    if (!route) return null;
-    return {
-      type: 'Feature' as const,
-      geometry: {
-        type: 'LineString' as const,
-        coordinates: route.geometry.map(([lat, lng, ele]) => [lng, lat, ele]),
-      },
-      properties: {},
-    };
-  }, [route]);
-
-  const bounds = useMemo(() => {
-    if (!route) return null;
-    let minLat = Infinity,
-      maxLat = -Infinity;
-    let minLng = Infinity,
-      maxLng = -Infinity;
+function computeBounds(routes: { geometry: [number, number, number][] }[]) {
+  let minLat = Infinity,
+    maxLat = -Infinity;
+  let minLng = Infinity,
+    maxLng = -Infinity;
+  for (const route of routes) {
     for (const [lat, lng] of route.geometry) {
       if (lat < minLat) minLat = lat;
       if (lat > maxLat) maxLat = lat;
       if (lng < minLng) minLng = lng;
       if (lng > maxLng) maxLng = lng;
     }
-    return [
-      [minLng, minLat],
-      [maxLng, maxLat],
-    ] as [[number, number], [number, number]];
-  }, [route]);
+  }
+  if (minLat === Infinity) return null;
+  return [
+    [minLng, minLat],
+    [maxLng, maxLat],
+  ] as [[number, number], [number, number]];
+}
+
+export function RouteMap({
+  routes,
+  hoveredRouteIndex,
+  selectedRouteIndex,
+  startPoint,
+  onMapClick,
+  interactive,
+}: RouteMapProps) {
+  const mapRef = useRef<MapRef>(null);
+
+  // Multi-route GeoJSON sources
+  const multiRouteData = useMemo(() => {
+    if (!routes) return null;
+    return routes.map((opt) => ({
+      geojson: routeToGeoJSON(opt.route.geometry),
+      color: opt.color,
+      startPoint: opt.route.start_point,
+    }));
+  }, [routes]);
+
+  // Compute bounds from all visible routes
+  const bounds = useMemo(() => {
+    if (routes && routes.length > 0) {
+      // In detail mode, only fit the selected route
+      if (selectedRouteIndex !== null && selectedRouteIndex !== undefined) {
+        const selected = routes[selectedRouteIndex];
+        if (selected) return computeBounds([selected.route]);
+      }
+      return computeBounds(routes.map((r) => r.route));
+    }
+    return null;
+  }, [routes, selectedRouteIndex]);
 
   useEffect(() => {
     if (mapRef.current && bounds) {
       mapRef.current.fitBounds(bounds, { padding: 80, duration: 500 });
     }
   }, [bounds]);
+
+  // Determine which routes to show in detail mode
+  const showSingleSelected =
+    selectedRouteIndex !== null && selectedRouteIndex !== undefined && routes;
 
   return (
     <Map
@@ -65,35 +105,58 @@ export function RouteMap({ route, startPoint, onMapClick, interactive }: RouteMa
       onClick={(e) => onMapClick?.({ lng: e.lngLat.lng, lat: e.lngLat.lat })}
       mapStyle={`https://api.maptiler.com/maps/streets-v2/style.json?key=${process.env.NEXT_PUBLIC_MAPTILER_API_KEY}`}
     >
-      {geojson && (
-        <Source id="route" type="geojson" data={geojson}>
-          <Layer
-            id="route-outline"
-            type="line"
-            paint={{
-              'line-color': '#ffffff',
-              'line-width': 6,
-            }}
-          />
-          <Layer
-            id="route-line"
-            type="line"
-            paint={{
-              'line-color': '#E8503A',
-              'line-width': 4,
-            }}
-          />
-        </Source>
-      )}
-      {route && (
-        <Marker longitude={route.start_point.lng} latitude={route.start_point.lat} anchor="center">
+      {/* Multi-route: render each route option */}
+      {multiRouteData?.map((data, index) => {
+        // In detail mode, only show selected route
+        if (showSingleSelected && index !== selectedRouteIndex) return null;
+
+        const isHovered = hoveredRouteIndex === index;
+        const isDimmed =
+          hoveredRouteIndex !== null &&
+          hoveredRouteIndex !== undefined &&
+          hoveredRouteIndex !== index &&
+          !showSingleSelected;
+
+        return (
+          <Source key={`route-${index}`} id={`route-${index}`} type="geojson" data={data.geojson}>
+            <Layer
+              id={`route-outline-${index}`}
+              type="line"
+              paint={{
+                'line-color': '#ffffff',
+                'line-width': isHovered ? 8 : 6,
+                'line-opacity': isDimmed ? 0.3 : 1,
+              }}
+            />
+            <Layer
+              id={`route-line-${index}`}
+              type="line"
+              paint={{
+                'line-color': data.color,
+                'line-width': isHovered ? 5 : 4,
+                'line-opacity': isDimmed ? 0.3 : 1,
+              }}
+            />
+          </Source>
+        );
+      })}
+
+      {/* Start marker (all routes share the same start) */}
+      {multiRouteData && multiRouteData.length > 0 && (
+        <Marker
+          longitude={multiRouteData[0].startPoint.lng}
+          latitude={multiRouteData[0].startPoint.lat}
+          anchor="center"
+        >
           <div
             className="h-4 w-4 rounded-full border-2 border-white shadow-sm"
-            style={{ backgroundColor: '#2E7D32' }}
+            style={{ backgroundColor: 'var(--color-route-start)' }}
           />
         </Marker>
       )}
-      {startPoint && !route && (
+
+      {/* Start point marker (from map click, before routes are generated) */}
+      {startPoint && (!routes || routes.length === 0) && (
         <Marker longitude={startPoint.lng} latitude={startPoint.lat} anchor="center">
           <div className="relative">
             <div

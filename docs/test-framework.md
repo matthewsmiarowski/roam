@@ -8,7 +8,7 @@ Tests exist to catch real breakage, not to prove coverage metrics. Every test in
 
 1. **Pure logic in `lib/`** — geo math, GPX generation, distance validation, loop geometry. These are deterministic, have clear inputs/outputs, and are the core of what makes routes correct. This is where most tests live.
 
-2. **API route contracts** — the shape of requests and responses from `/api/generate-route`. External services are mocked at the boundary. We test that the orchestration logic handles happy paths and error cases correctly.
+2. **Orchestration logic** — the conversation orchestrator (`lib/conversation.ts`), state reducer (`lib/conversation-state.ts`), and LLM integration (`lib/llm.ts`). External services are mocked at the boundary. We test that the logic handles happy paths and error cases correctly.
 
 3. **Critical edge cases** — antimeridian wrapping, zero-distance routes, missing fields, malformed LLM responses. Things that would silently produce wrong results.
 
@@ -33,17 +33,18 @@ Tests exist to catch real breakage, not to prove coverage metrics. Every test in
 ```
 lib/
 ├── geo.ts
-├── geo.test.ts          # test file lives next to source
+├── geo.test.ts              # test file lives next to source
 ├── gpx.ts
 ├── gpx.test.ts
 ├── routing.ts
 ├── routing.test.ts
+├── conversation.ts
+├── conversation.test.ts
+├── conversation-state.ts
+├── conversation-state.test.ts
+├── llm.ts
+├── llm.test.ts
 └── ...
-app/
-└── api/
-    └── generate-route/
-        ├── route.ts
-        └── route.test.ts
 ```
 
 Test files are **co-located** with their source files using the `.test.ts` suffix. No separate `__tests__` directories, no `tests/` folder at the root. When you open a source file, its tests are right there.
@@ -136,7 +137,7 @@ If a fixture is only used in one test file, define it inline in that file.
 
 - **Bug fix** — if a bug was caused by incorrect logic (not a typo), add a test that would have caught it.
 
-- **API contract change** — if the request or response shape of `/api/generate-route` changes, update the contract test.
+- **State or orchestration change** — if the conversation state machine or route generation orchestration changes, update the corresponding tests.
 
 - **Don't** write tests preemptively for code that doesn't exist yet or might change shape. Write them when the interface stabilizes.
 

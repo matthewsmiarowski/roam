@@ -4,15 +4,16 @@ import { Download } from 'lucide-react';
 
 interface GpxDownloadProps {
   gpx: string;
+  filename?: string;
 }
 
-export function GpxDownload({ gpx }: GpxDownloadProps) {
+export function GpxDownload({ gpx, filename }: GpxDownloadProps) {
   const handleDownload = () => {
     const blob = new Blob([gpx], { type: 'application/gpx+xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'roam-route.gpx';
+    a.download = filename ?? 'roam-route.gpx';
     a.click();
     URL.revokeObjectURL(url);
   };

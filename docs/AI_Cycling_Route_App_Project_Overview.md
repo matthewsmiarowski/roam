@@ -87,6 +87,54 @@ The cycling data ecosystem is increasingly restrictive. Major platforms have tig
 
 ---
 
+## Data Strategy: Closing the Route Quality Gap
+
+The biggest risk to route quality is the absence of proprietary ride data. Platforms like Strava know which roads cyclists actually ride because millions of users generate GPS traces every day. We will not have that data at launch, and may never have it at the scale incumbents do. Rather than trying to replicate a proprietary dataset, our strategy is to assemble a "good roads" signal from multiple public and inferential sources, layered so that each one adds value independently and they compound when combined.
+
+### Layer 1: OSM Road Intelligence
+
+OpenStreetMap contains rich cycling-relevant metadata that most routing tools underutilize. Beyond basic road classification (which GraphHopper's bike profile already uses), OSM tags encode surface type, road width, speed limits, cycling infrastructure, and official cycling network designations. We can build a road-quality scoring model that penalizes high-traffic arterials, rewards designated cycling routes, prefers paved surfaces, and accounts for road width and speed limits — all without any proprietary data. This is deterministic, available today, and gets us a significant portion of the way toward "roads cyclists would actually ride."
+
+**What exists today:** GraphHopper's `bike` profile provides baseline OSM-aware routing, but we pass no custom weighting parameters. The `road_preference` field (quiet roads, bike paths) is extracted by the LLM but not yet connected to the routing engine.
+
+**Next step:** Expose GraphHopper's custom model parameters to translate road preference into actual routing behavior, and explore querying OSM directly for richer road metadata to inform waypoint selection.
+
+### Layer 2: LLM as Cycling Local
+
+Large language models have been trained on vast amounts of cycling-specific content: forum posts, ride reports, route reviews, segment descriptions, cycling blog recommendations, and guidebook text. This means the LLM already "knows" that in Boulder you ride up Flagstaff, that in the Bay Area you take Paradise Loop through Tiburon, and that in Girona you climb Rocacorba via the south side. This collective cycling knowledge has never been structured for routing — but we can extract it.
+
+**What exists today:** The system prompt positions Claude as a knowledgeable cycling friend, and the named waypoint system already supports geocoding specific roads and climbs. However, the LLM is primarily used to suggest compass bearings (directions), not specific roads. Named waypoints only activate when the user explicitly mentions a place.
+
+**Next step:** Enrich the prompt chain so the LLM proactively suggests specific roads, named climbs, and known cycling corridors — even for general queries like "50-mile ride from Mill Valley." The named waypoint and geocoding pipeline already supports this; the LLM just needs to be prompted to use it more aggressively. This turns the LLM from a direction-picker into something closer to asking a local club rider for a recommendation.
+
+### Layer 3: Public GPX Aggregation
+
+A large corpus of cycling routes is already publicly available: Ride With GPS public routes, cycling club websites, gran fondo and event routes, and tourism board cycling itineraries. We can build a pipeline that ingests publicly shared GPX files, extracts the road segments they use, and creates a popularity-weighted overlay on the road network. Roads that appear in many public routes get a higher routing score. This is essentially building our own heatmap from public data. It will not match Strava's coverage, but it will capture the most important roads in popular cycling areas — which is where most users will be generating routes.
+
+**What exists today:** Nothing. This requires a data ingestion pipeline.
+
+**Next step:** Build a prototype scraper for a single source (e.g., publicly shared routes from a popular cycling region) and validate whether the resulting road-frequency data meaningfully improves route quality compared to OSM signals alone.
+
+### Layer 4: User-Contributed Routes Over Time
+
+Every GPX that users export and actually ride is a signal. Over time, if users can optionally share routes back — or even just confirm "I rode this and it was good" — we build our own proprietary dataset. The key insight is that we do not need this layer to launch. It is a flywheel that compounds as the user base grows, and it is what the Phase 3 vision of "community data moat" is built on.
+
+**What exists today:** Nothing. Requires user accounts (v4) and a feedback mechanism.
+
+**Next step:** Design the data model for route feedback early, even if the collection mechanism comes later. Understanding what signals we want to capture (rode it, liked it, modified it, avoided a section) informs decisions made in earlier layers.
+
+### The Segment Library Concept
+
+A concrete implementation that ties these layers together: build a curated library of "known-good segments" — specific roads or stretches that are popular with cyclists. These segments are seeded from public GPX data (Layer 3), LLM knowledge (Layer 2), and OSM cycling route designations (Layer 1). When generating a route, the system tries to route through as many known-good segments as possible, rather than just finding the shortest or flattest path between generic waypoints.
+
+The mental model: instead of asking GraphHopper "get me from A to B on a bike," we ask the LLM "what are the best roads to ride between A and B?", get back specific waypoints on known-good roads, then use GraphHopper to connect them. This is a meaningful shift from direction-based routing to road-quality-based routing.
+
+### Sequencing
+
+Layers 1 and 2 can be improved immediately with prompt engineering and routing parameter changes — no new infrastructure required. Layer 3 requires a data pipeline but can start small (one region, one source). Layer 4 requires user accounts and a feedback loop, aligning naturally with v4 and v5 of the product roadmap. The layers are independent: each one improves route quality on its own, and they compound when combined.
+
+---
+
 ## Proposed Iterations
 
 The product will be built in phases, each validating a specific assumption before investing in the next layer. Each version is functional on its own. If an assumption fails at any stage, the product can pivot without wasted effort on layers above.

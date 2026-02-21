@@ -277,3 +277,54 @@ function buildRouteData(
     start_point: { lat: start.lat, lng: start.lng },
   };
 }
+
+// ---------------------------------------------------------------------------
+// v1: Single-attempt route generation with named waypoint support
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge named waypoints (geocoded LatLng) with bearing-based waypoints.
+ * Named waypoints take priority slots; bearings fill the remainder.
+ * Total capped at MAX_WAYPOINTS to stay within GraphHopper free tier limits.
+ */
+export function mergeWaypoints(bearingWaypoints: LatLng[], namedWaypoints: LatLng[]): LatLng[] {
+  const named = namedWaypoints.slice(0, MAX_WAYPOINTS);
+  const bearingSlots = MAX_WAYPOINTS - named.length;
+  const bearings = bearingWaypoints.slice(0, bearingSlots);
+  return [...named, ...bearings];
+}
+
+/**
+ * Generate a single route in one attempt (no retry loop).
+ * Used by the v1 conversation pipeline to generate 3 options in parallel.
+ *
+ * Named waypoints (already geocoded) are merged with bearing-based waypoints.
+ * No distance retry or star-shaped detection — speed over precision for
+ * the comparison view. The user picks one, and we show it as-is.
+ *
+ * @throws {Error} if GraphHopper fails
+ */
+export async function generateRouteSingleAttempt(
+  params: RouteParams,
+  start: LatLng,
+  namedWaypointCoords: LatLng[] = []
+): Promise<RouteData> {
+  const radiusKm = calculateRadius(params.target_distance_km);
+  const baseBearings = params.waypoint_bearings.slice(0, MAX_WAYPOINTS);
+  const loopDirection = baseBearings[0];
+
+  // Offset center so start sits on the circumference
+  const loopCenter = projectPoint(start, loopDirection, radiusKm);
+
+  // Sort bearings clockwise from start's position
+  const startAngle = (loopDirection + 180) % 360;
+  const sortedBearings = sortBearingsClockwise(baseBearings, startAngle);
+
+  const bearingWaypoints = generateWaypoints(loopCenter, sortedBearings, radiusKm);
+  const waypoints = mergeWaypoints(bearingWaypoints, namedWaypointCoords);
+  const allPoints = [start, ...waypoints];
+
+  const ghResponse = await callGraphHopper(allPoints);
+  const result = parseGraphHopperResponse(ghResponse);
+  return buildRouteData(result, start);
+}

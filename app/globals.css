@@ -33,6 +33,15 @@
     --color-elevation-fill: #e8503a;
     --color-elevation-stroke: #e8503a;
 
+    /* Colors — Route Options */
+    --color-route-option-1: #e8503a;
+    --color-route-option-2: #2979ff;
+    --color-route-option-3: #7b1fa2;
+
+    /* Colors — Chat */
+    --color-chat-user-bubble: var(--color-accent-subtle);
+    --color-chat-ai-bubble: var(--color-surface-raised);
+
     /* Typography */
     --font-sans:
       ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
@@ -90,5 +99,18 @@
   }
   100% {
     transform: translateX(-100%);
+  }
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-4px);
   }
 }

@@ -30,37 +30,85 @@ export interface RouteParams {
   reasoning: string;
 }
 
-/** POST /api/generate-route request body. */
-export interface GenerateRouteRequest {
-  prompt: string;
+// ---------------------------------------------------------------------------
+// Conversational Route Generation
+// ---------------------------------------------------------------------------
+
+/** A single chat message in the conversation. */
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  /** Attached route options (only on assistant messages that generated routes). */
+  routeOptions?: RouteOption[];
+  timestamp: number;
+}
+
+/** One of 3 route options presented to the user. */
+export interface RouteOption {
+  id: string;
+  name: string;
+  description: string;
+  route: RouteData;
+  gpx: string;
+  color: string;
+}
+
+/** POST /api/chat request body. */
+export interface ChatRequest {
+  messages: { role: 'user' | 'assistant'; content: string }[];
   user_location?: { latitude: number; longitude: number };
   start_coordinates?: { lat: number; lng: number };
 }
 
-/** POST /api/generate-route success response. */
-export interface GenerateRouteResponse {
-  route: RouteData;
-  gpx: string;
-  metadata: {
-    parsed_params: Omit<RouteParams, 'waypoint_bearings' | 'reasoning'>;
-    llm_reasoning: string;
-  };
+/** Server-Sent Event types from /api/chat. */
+export type ChatSSEEvent =
+  | { event: 'text'; data: { chunk: string } }
+  | { event: 'generating'; data: { message: string } }
+  | { event: 'routes'; data: { options: RouteOption[] } }
+  | { event: 'error'; data: { message: string } }
+  | { event: 'done'; data: Record<string, never> };
+
+/** A route variant as returned by the LLM's generate_routes tool. */
+export interface RouteVariant {
+  name: string;
+  description: string;
+  waypoint_bearings: number[];
+  named_waypoints?: { name: string; approximate_location: string }[];
 }
 
-/** POST /api/generate-route error response. */
-export interface GenerateRouteError {
-  status: 'error';
-  message: string;
+/** Full LLM output from the generate_routes tool call. */
+export interface GenerateRoutesParams {
+  start_location: string;
+  start_precision: 'exact' | 'general';
+  target_distance_km: number;
+  elevation_character: 'flat' | 'rolling' | 'hilly' | 'mountainous';
+  road_preference: 'any' | 'quiet_roads' | 'bike_paths';
+  route_variants: RouteVariant[];
+  reasoning: string;
 }
 
-/** Frontend state machine. */
-export type AppState =
-  | { status: 'idle' }
-  | { status: 'loading'; prompt: string }
-  | {
-      status: 'success';
-      route: RouteData;
-      gpx: string;
-      metadata: GenerateRouteResponse['metadata'];
-    }
-  | { status: 'error'; message: string };
+/** Frontend conversation state (v1). */
+export interface ConversationState {
+  phase: 'chatting' | 'generating' | 'options' | 'detail';
+  messages: Message[];
+  streamingText: string | null;
+  routeOptions: RouteOption[] | null;
+  selectedRouteIndex: number | null;
+  userLocation: { latitude: number; longitude: number } | null;
+  startPoint: { lat: number; lng: number } | null;
+}
+
+/** Reducer actions for conversation state. */
+export type ConversationAction =
+  | { type: 'ADD_USER_MESSAGE'; content: string }
+  | { type: 'START_STREAMING' }
+  | { type: 'APPEND_STREAM_CHUNK'; chunk: string }
+  | { type: 'FINISH_STREAMING'; content: string }
+  | { type: 'SET_ROUTE_OPTIONS'; options: RouteOption[]; aiMessage: string }
+  | { type: 'SELECT_ROUTE'; index: number }
+  | { type: 'BACK_TO_OPTIONS' }
+  | { type: 'SET_ERROR'; message: string }
+  | { type: 'SET_USER_LOCATION'; location: { latitude: number; longitude: number } }
+  | { type: 'SET_START_POINT'; point: { lat: number; lng: number } | null }
+  | { type: 'RESET' };

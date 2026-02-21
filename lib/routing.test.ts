@@ -6,6 +6,8 @@ import {
   generateWaypoints,
   calculateElevationGain,
   generateRoute,
+  mergeWaypoints,
+  generateRouteSingleAttempt,
 } from './routing';
 
 const girona: LatLng = { lat: 41.9794, lng: 2.8214 };
@@ -488,5 +490,110 @@ describe('generateRoute', () => {
 
     await expect(generateRoute(baseParams, girona)).rejects.toThrow('GraphHopper error 500');
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// --- v1: mergeWaypoints ---
+
+describe('mergeWaypoints', () => {
+  const bearingWps: LatLng[] = [
+    { lat: 42.0, lng: 2.8 },
+    { lat: 42.1, lng: 2.9 },
+    { lat: 41.9, lng: 2.7 },
+  ];
+
+  it('returns all bearing waypoints when no named waypoints', () => {
+    const result = mergeWaypoints(bearingWps, []);
+    expect(result).toHaveLength(3);
+    expect(result).toEqual(bearingWps);
+  });
+
+  it('replaces bearing waypoints with named waypoints', () => {
+    const named: LatLng[] = [{ lat: 42.03, lng: 2.78 }];
+    const result = mergeWaypoints(bearingWps, named);
+
+    expect(result).toHaveLength(3);
+    expect(result[0]).toEqual(named[0]); // named first
+    expect(result[1]).toEqual(bearingWps[0]); // remaining bearing slots
+    expect(result[2]).toEqual(bearingWps[1]);
+  });
+
+  it('caps total at 3 waypoints even with more named', () => {
+    const named: LatLng[] = [
+      { lat: 42.03, lng: 2.78 },
+      { lat: 42.05, lng: 2.75 },
+      { lat: 42.08, lng: 2.72 },
+      { lat: 42.1, lng: 2.7 }, // 4th — should be dropped
+    ];
+    const result = mergeWaypoints(bearingWps, named);
+
+    expect(result).toHaveLength(3);
+    // All 3 slots taken by named, no bearing waypoints
+    expect(result).toEqual(named.slice(0, 3));
+  });
+
+  it('fills remaining slots with bearing waypoints', () => {
+    const named: LatLng[] = [
+      { lat: 42.03, lng: 2.78 },
+      { lat: 42.05, lng: 2.75 },
+    ];
+    const result = mergeWaypoints(bearingWps, named);
+
+    expect(result).toHaveLength(3);
+    expect(result[0]).toEqual(named[0]);
+    expect(result[1]).toEqual(named[1]);
+    expect(result[2]).toEqual(bearingWps[0]); // 1 bearing slot left
+  });
+});
+
+// --- v1: generateRouteSingleAttempt ---
+
+describe('generateRouteSingleAttempt', () => {
+  it('generates a route with a single GraphHopper call', async () => {
+    mockFetch.mockResolvedValue(makeGraphHopperResponse(60000));
+
+    const route = await generateRouteSingleAttempt(baseParams, girona);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(route.distance_km).toBe(60);
+    expect(route.start_point).toEqual({ lat: girona.lat, lng: girona.lng });
+  });
+
+  it('does not retry on distance mismatch', async () => {
+    // Returns 90km — way off target, but single-attempt should not retry
+    mockFetch.mockResolvedValue(makeGraphHopperResponse(90000));
+
+    const route = await generateRouteSingleAttempt(baseParams, girona);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(route.distance_km).toBe(90);
+  });
+
+  it('passes named waypoint coords to GraphHopper', async () => {
+    mockFetch.mockResolvedValue(makeGraphHopperResponse(60000));
+
+    const namedWp: LatLng = { lat: 42.03, lng: 2.78 };
+    await generateRouteSingleAttempt(baseParams, girona, [namedWp]);
+
+    const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    // Should have start + 3 waypoints (1 named + 2 bearing) + return to start
+    expect(callBody.points).toHaveLength(5);
+    // Named waypoint should be included in the waypoints
+    const hasNamedWp = callBody.points.some(
+      (p: number[]) => Math.abs(p[0] - namedWp.lng) < 0.01 && Math.abs(p[1] - namedWp.lat) < 0.01
+    );
+    expect(hasNamedWp).toBe(true);
+  });
+
+  it('propagates GraphHopper errors', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'Bad request',
+    });
+
+    await expect(generateRouteSingleAttempt(baseParams, girona)).rejects.toThrow(
+      'GraphHopper error 400'
+    );
   });
 });

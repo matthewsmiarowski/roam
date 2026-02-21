@@ -82,7 +82,7 @@ Compare against the project's established conventions (from `CLAUDE.md`):
 Compare against the architecture documented in `docs/technical-overview.md`:
 
 - **Separation of concerns** — is business logic in `lib/` and presentation in `components/`? API routes should be thin orchestrators, not contain business logic.
-- **State management** — follows the discriminated union pattern? No unnecessary state libraries or complex state when simple `useState` suffices.
+- **State management** — follows the conversation state machine pattern (`useReducer` with phases)? No unnecessary state libraries or complex state.
 - **Data flow** — unidirectional? Props flowing down, events flowing up? No prop drilling more than 2 levels (extract a component or use composition).
 - **API route structure** — follows the established request/response contract? Error responses follow the `{ status: "error", message: string }` pattern?
 - **Module boundaries** — `lib/` modules have no React or Next.js imports. Components don't call external APIs directly (they go through the API route).
@@ -122,7 +122,7 @@ Check that the codebase isn't accumulating unnecessary variations:
 ### 8. Error Handling & Edge Cases
 
 - **API routes** — do they catch errors and return structured error responses? Are external service failures (Claude, GraphHopper, Nominatim) handled gracefully?
-- **Frontend** — does the UI handle all states in the discriminated union (`idle`, `loading`, `success`, `error`)? Are loading and error states shown appropriately?
+- **Frontend** — does the UI handle all conversation phases (`chatting`, `generating`, `options`, `detail`)? Are streaming and error states shown appropriately?
 - **Network failures** — what happens if `fetch` throws? Is there a try/catch?
 - **Timeouts** — are external API calls bounded by timeouts?
 - **Validation** — are inputs validated at system boundaries (API route request body, external API responses)?

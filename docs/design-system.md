@@ -10,7 +10,7 @@
 
 4. **Speed matches the sport.** Interactions feel immediate. Loading states communicate progress. Transitions are quick and purposeful — no lazy fades or decorative animation.
 
-5. **One screen, one job.** v0 is a single-page app. No navigation, no settings sprawl. Prompt → Route → Ride.
+5. **One screen, one job.** Single-page app. No navigation, no settings sprawl. Chat → Compare → Ride.
 
 ---
 
@@ -56,11 +56,28 @@ The primary accent is a vivid red-orange that reads as energetic and athletic. I
 | `--color-warning` | `#F57C00`   | Caution states                      |
 | `--color-error`   | `#D32F2F`   | Error messages, destructive actions |
 
+### Route Options
+
+Three distinct colors for the 3-route comparison view. Each route option gets a consistent color across the route card, map polyline, and detail view.
+
+| Token                    | Light Value | Usage                       |
+| ------------------------ | ----------- | --------------------------- |
+| `--color-route-option-1` | `#E8503A`   | First route option (coral)  |
+| `--color-route-option-2` | `#2979FF`   | Second route option (blue)  |
+| `--color-route-option-3` | `#7B1FA2`   | Third route option (purple) |
+
+### Chat
+
+| Token                      | Light Value                   | Usage                        |
+| -------------------------- | ----------------------------- | ---------------------------- |
+| `--color-chat-user-bubble` | `var(--color-accent-subtle)`  | User message background      |
+| `--color-chat-ai-bubble`   | `var(--color-surface-raised)` | Assistant message background |
+
 ### Map-Specific
 
 | Token                        | Light Value | Usage                                            |
 | ---------------------------- | ----------- | ------------------------------------------------ |
-| `--color-route-line`         | `#E8503A`   | Route polyline on map                            |
+| `--color-route-line`         | `#E8503A`   | Route polyline on map (single-route mode)        |
 | `--color-route-line-outline` | `#FFFFFF`   | Route line outer stroke (legibility on any tile) |
 | `--color-route-start`        | `#2E7D32`   | Start marker                                     |
 | `--color-route-end`          | `#E8503A`   | End marker (same as start for loops)             |
@@ -147,57 +164,113 @@ Minimal shadows. The bold type and strong borders carry hierarchy — shadows ar
 
 ### Structure
 
-The app is a single full-viewport screen. The map fills the available space; all other UI overlays or docks to the edges.
+The app is a single full-viewport screen with a chat panel on the left and a map filling the remaining space.
 
 ```
-┌──────────────────────────────────────────┐
-│  ┌─ Prompt Input ─────────────────────┐  │
-│  └────────────────────────────────────┘  │
-│                                          │
-│  ┌─ Sidebar ──┐                          │
-│  │ Stats      │         MAP              │
-│  │ GPX btn    │     (fills viewport)     │
-│  └────────────┘                          │
-│                                          │
-│  ┌─ Elevation Profile ───────────────┐   │
-│  └───────────────────────────────────┘   │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  ┌─ Chat Panel (400px) ─┐  ┌─ Map ─────────────┐│
+│  │ [Roam]         [New] │  │                    ││
+│  │                      │  │  MapLibre GL       ││
+│  │ AI: "Hey! Tell me.." │  │  (multi-route w/   ││
+│  │ User: "60km from..." │  │   hover highlight) ││
+│  │ AI: "Great! Here..." │  │                    ││
+│  │ [RouteCard]          │  │                    ││
+│  │ [RouteCard]          │  │                    ││
+│  │ [RouteCard]          │  │                    ││
+│  │                      │  │                    ││
+│  │ ┌─ Input ──────────┐ │  │ ┌─ Elevation ────┐││
+│  │ │ Describe ride... │ │  │ └────────────────┘││
+│  │ └─────────────────┘ │  └────────────────────┘│
+│  └──────────────────────┘                        │
+└──────────────────────────────────────────────────┘
 ```
 
-- **Prompt input:** Floats at top-center, overlaying the map. Full width minus generous horizontal margin. `--shadow-lg`.
-- **Sidebar:** Docked left, semi-transparent or solid surface background. Contains route stats and GPX download. Collapses or hides when no route is loaded.
-- **Elevation profile:** Docked to bottom, spans full width. ~120–160px tall. Appears after route generation.
-- **Map:** Fills the entire viewport behind all overlays. `z-index: 0`.
+- **Chat panel:** Fixed 400px left side, full height. Contains message list (scrollable), route cards, route detail, and input pinned to bottom. `--shadow-md` border-right divider.
+- **Map:** Fills the remaining viewport to the right. Shows all 3 route options in distinct colors (options phase), or a single selected route (detail phase). Hover over a route card highlights the corresponding route on the map.
+- **Elevation profile:** Docked to bottom of the map area, spans the map width. ~140px tall. Appears when a route is selected (detail phase only).
+- **Start point:** Map-click sets a start marker with a ping animation. Coordinates shown as a note above the input bar.
 
 ### Responsive Notes (Future)
 
-Desktop-first for v0. When mobile is added:
+Desktop-first. When mobile is added:
 
-- Prompt input goes full-width with reduced padding.
-- Sidebar becomes a bottom sheet.
+- Chat panel becomes a bottom sheet over the map.
 - Elevation profile stacks below the map instead of overlaying.
 
 ### Z-Index Scale
 
-| Layer    | z-index | Contents                       |
-| -------- | ------- | ------------------------------ |
-| Map      | 0       | MapLibre canvas                |
-| Overlays | 10      | Elevation profile, sidebar     |
-| Controls | 20      | Prompt input, floating buttons |
-| Modals   | 30      | Error displays, confirmations  |
-| Loading  | 40      | Full-screen loading overlay    |
+| Layer    | z-index | Contents                      |
+| -------- | ------- | ----------------------------- |
+| Map      | 0       | MapLibre canvas               |
+| Overlays | 10      | Elevation profile, chat panel |
 
 ---
 
 ## Component Guidelines
 
-### Prompt Input
+### Chat Panel
 
-- Large, inviting text input — this is the primary interaction point.
-- Placeholder text sets the tone: _"Describe your ride — e.g., 60km hilly loop from Girona"_
-- Submit via button or Enter key.
-- `--radius-lg`, `--shadow-lg`. Feels like a search bar, not a form field.
-- Disabled state with reduced opacity during route generation.
+- Fixed 400px left-side container, full viewport height.
+- Header: "Roam" heading + "New" reset button.
+- Scrollable message area in the middle.
+- Start point note (coordinates) shown above the input when set via map click.
+- Chat input pinned to bottom with border-top divider.
+- `--color-surface` background, `--shadow-md` on the right border.
+
+### Chat Message
+
+- User messages: right-aligned, `--color-chat-user-bubble` background.
+- Assistant messages: left-aligned, `--color-chat-ai-bubble` background.
+- Max width 85% of the chat panel. `--radius-md` corners.
+- 14px body text, `whitespace-pre-wrap` to preserve newlines.
+- Assistant messages with routes embed a `RouteCardGroup` below the text.
+
+### Chat Input
+
+- Auto-resizing textarea (1–4 rows, max 120px) + send button.
+- `--radius-md` border, `--color-border` default, `--color-border-strong` on focus.
+- Send button: accent-colored circle with Send icon. Disabled when empty or generating.
+- Submit via button click or Enter key (Shift+Enter for newline).
+
+### Typing Indicator
+
+- Three-dot pulse animation shown while waiting for AI response.
+- Dots are 7px circles, `--color-text-tertiary`, staggered animation (0.2s delay each).
+- `aria-live="polite"` with screen-reader-only "Roam is thinking…" text.
+
+### Route Card
+
+- Compact button-style card for each of the 3 route options.
+- Color swatch (12px circle) + route name in bold.
+- Stats row: distance (km), elevation (m), estimated ride time, difficulty badge.
+- One-line description below stats.
+- Hover: border strengthens, subtle shadow, "Click to select" hint appears.
+- Mouse enter/leave triggers route highlight on the map.
+
+### Route Card Group
+
+- Vertical stack of 3 RouteCard components with `--space-2` gap.
+- Embedded within assistant chat messages that have route options.
+
+### Route Detail
+
+- Shown inline in the chat panel when a route is selected.
+- "Back to options" link with chevron icon.
+- Route name with color swatch, description, estimated ride time.
+- Full route stats (distance km/mi, elevation m/ft).
+- GPX download button with route-named filename.
+
+### Difficulty Badge
+
+- Color-coded pill on route cards indicating climbing difficulty.
+- Based on elevation gain per km: Easy (< 10 m/km, green), Moderate (10-15, orange), Hard (15-20, coral), Brutal (> 20, red).
+- 11px font, `--radius-full`, white text on colored background.
+
+### Estimated Ride Time
+
+- Shown on route cards and route detail.
+- Formula: base speed 25 km/h, minus 1 km/h per 10 m/km climbing ratio (minimum 10 km/h).
+- Displayed as "Xh Ym" or just "Ym" for short rides.
 
 ### Route Stats
 
@@ -213,42 +286,24 @@ Desktop-first for v0. When mobile is added:
 - X-axis: distance (km). Y-axis: elevation (m).
 - Clean grid lines, minimal tick labels. No chart junk.
 - Background: `--color-surface` with `--shadow-md` when overlaying the map.
+- Docked to bottom of map area (not chat panel). Only visible in detail phase.
 
 ### Map
 
 - MapLibre GL JS with MapTiler vector tiles.
-- Route line: `--color-route-line`, 4px width, with 6px `--color-route-line-outline` behind for legibility.
-- Start/end markers: simple circles with border, colored per `--color-route-start` / `--color-route-end`.
-- Map controls (zoom, compass) use MapLibre defaults — don't fight the library.
-- Auto-fit bounds to route with padding after generation.
+- **Multi-route mode (options phase):** 3 routes displayed simultaneously, each in its route option color. Route outline 6px white, route line 4px colored.
+- **Hover highlight:** When a route card is hovered, that route thickens (5px line, 8px outline) and others dim to 30% opacity.
+- **Single-route mode (detail phase):** Only the selected route is shown; others hidden.
+- Start marker: green circle (`--color-route-start`), shared across all routes.
+- Start point marker (from map click): accent-colored circle with ping animation.
+- Map-click sets start point only in `chatting` phase (cursor: crosshair).
+- Auto-fit bounds to all visible routes with padding.
 
 ### GPX Download Button
 
-- Secondary action — not the hero. Positioned in the sidebar below stats.
-- Outlined or ghost style button. Accent color on hover/press.
+- Secondary action — outlined style button. Accent color on hover/press.
 - Icon + label: download icon + "Export GPX".
-
-### Loading State
-
-- Displayed during route generation (can take 5–15 seconds).
-- Sliding accent-colored progress bar in a centered card over a semi-transparent overlay.
-- Status text: "Generating route…"
-- Map stays visible underneath (don't blank the screen).
-
-### Start Point Badge
-
-- Pill-shaped badge that appears below the prompt input when the user clicks the map to set a start point.
-- Shows coordinates in `lat, lng` format (4 decimal places) with a MapPin icon.
-- Clear button (X) removes the start point.
-- `--radius-full`, `--color-accent-subtle` background, `--color-accent-text` text.
-- Only visible in `idle` and `error` states — hidden once a route is generated.
-
-### Error Display
-
-- Inline error banner, not a modal. Appears below the prompt input.
-- `--color-error` left border or background tint.
-- Concise message + optional retry button.
-- Dismissible.
+- Accepts optional `filename` prop for route-named downloads (e.g., `roam-northern-hills.gpx`).
 
 ---
 
@@ -263,7 +318,8 @@ Keep it fast and functional. The sport is cycling, not ballet.
 | Layout (height, width)   | 250ms    | `ease-in-out` | Elevation profile expand        |
 
 - No motion for route line drawing — let MapLibre handle map animations natively.
-- Loading spinner/pulse: continuous, 1.5s cycle, `ease-in-out`.
+- Typing indicator dots: 1.4s cycle, `ease-in-out`, staggered 0.2s per dot.
+- Start point ping: 1.5s cycle, `ease-out`, scales from 1x to 2.5x with opacity fade.
 - `prefers-reduced-motion: reduce` — collapse all transitions to instant.
 
 ---
@@ -272,7 +328,7 @@ Keep it fast and functional. The sport is cycling, not ballet.
 
 - Use Lucide icons (open source, tree-shakable, consistent stroke style).
 - 20px default size, 1.5px stroke.
-- Icons are always paired with text labels in v0 — no icon-only buttons except map controls and the prompt submit button (which uses `aria-label` for accessibility).
+- Icons are always paired with text labels — no icon-only buttons except map controls and the chat send button (which uses `aria-label` for accessibility).
 
 ---
 
@@ -282,7 +338,7 @@ Keep it fast and functional. The sport is cycling, not ballet.
 - Color contrast: minimum WCAG AA (4.5:1 for body text, 3:1 for large text and UI components).
 - `--color-accent` (#E8503A) on white (#FFFFFF) = 4.0:1 — use `--color-accent-text` (#C13A27 = 4.9:1) for text.
 - Elevation profile and route stats don't rely on color alone — values are always shown as text.
-- Prompt input has a visible label (can be the placeholder if styled accessibly, but `aria-label` is required).
-- Map: provide a text summary of the route below the map for screen readers.
-- Loading state: `aria-live="polite"` on status text.
-- Keyboard: Tab navigates prompt → submit → stats → GPX download. Escape dismisses errors.
+- Chat input has `aria-label="Chat message"`.
+- Typing indicator uses `aria-live="polite"` with screen-reader-only "Roam is thinking…" text.
+- Send and reset buttons have `aria-label` attributes.
+- Chat panel auto-scrolls to latest message using smooth scrollIntoView.

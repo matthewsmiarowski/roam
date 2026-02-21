@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What Is Roam
 
-AI-powered cycling route generation. Users describe a ride in natural language, get a rideable cycling route on a map with elevation profile and GPX export. Single Next.js app (TypeScript, App Router) — frontend and API routes in one process.
+AI-powered cycling route generation. Users describe a ride through conversational chat, get 3 route options to compare on a map, then select one for detailed stats, elevation profile, and GPX export. Single Next.js app (TypeScript, App Router) — frontend and API routes in one process.
 
 For full architecture, algorithms, API contracts, and technical decisions, see [docs/technical-overview.md](docs/technical-overview.md). For UI design tokens, layout rules, and component guidelines, see [docs/design-system.md](docs/design-system.md).
 
@@ -25,9 +25,10 @@ For testing philosophy and conventions, see [docs/test-framework.md](docs/test-f
 ## Key Directories
 
 - `app/` — Next.js App Router pages and API routes
-- `app/api/generate-route/route.ts` — Single API endpoint, thin orchestrator
-- `lib/` — Pure TypeScript modules (no framework dependency): LLM, routing, geocoding, GPX, geo math, shared types
-- `components/` — React components
+- `app/api/chat/route.ts` — SSE streaming chat endpoint (single API endpoint)
+- `lib/` — Pure TypeScript modules: LLM streaming, conversation orchestrator, state reducer, routing, geocoding, GPX, geo math, shared types
+- `lib/use-chat.ts` — Custom React hook for SSE connection + state dispatch
+- `components/` — React components (chat panel, route cards, map, elevation profile)
 - `docs/` — Technical overview, design system, and product vision
 - `project-overview/` — PRD and tech plan for v0
 

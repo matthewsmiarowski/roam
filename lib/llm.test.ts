@@ -1,96 +1,143 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockCreate = vi.fn();
+// Mock stream that yields events in sequence
+function createMockStream(events: unknown[]) {
+  return {
+    [Symbol.asyncIterator]() {
+      let index = 0;
+      return {
+        async next() {
+          if (index < events.length) {
+            return { done: false, value: events[index++] };
+          }
+          return { done: true, value: undefined };
+        },
+      };
+    },
+  };
+}
+
+const mockStream = vi.fn();
 
 vi.mock('@anthropic-ai/sdk', () => ({
   default: class {
-    messages = { create: mockCreate };
+    messages = { stream: mockStream };
   },
 }));
 
-// Import after mock is set up
-const { extractRouteParams } = await import('./llm');
+const { streamConversation, CONVERSATION_SYSTEM_PROMPT, GENERATE_ROUTES_TOOL } =
+  await import('./llm');
 
 beforeEach(() => {
-  mockCreate.mockReset();
+  mockStream.mockReset();
 });
 
-const validToolUseResponse = {
-  content: [
-    {
-      type: 'tool_use',
-      id: 'test-id',
-      name: 'generate_route_parameters',
-      input: {
-        start_location: 'Girona, Spain',
-        start_precision: 'general',
-        target_distance_km: 60,
-        elevation_character: 'hilly',
-        road_preference: 'quiet_roads',
-        waypoint_bearings: [330, 90, 210],
-        reasoning: 'Hills are north and west of Girona.',
-      },
-    },
-  ],
-};
-
-describe('extractRouteParams', () => {
-  it('extracts route params from a tool_use response', async () => {
-    mockCreate.mockResolvedValue(validToolUseResponse);
-
-    const params = await extractRouteParams('60km hilly loop from Girona');
-
-    expect(params.start_location).toBe('Girona, Spain');
-    expect(params.target_distance_km).toBe(60);
-    expect(params.elevation_character).toBe('hilly');
-    expect(params.road_preference).toBe('quiet_roads');
-    expect(params.waypoint_bearings).toHaveLength(3);
-    expect(params.reasoning).toBe('Hills are north and west of Girona.');
+describe('CONVERSATION_SYSTEM_PROMPT', () => {
+  it('mentions Roam and cycling', () => {
+    expect(CONVERSATION_SYSTEM_PROMPT).toContain('Roam');
+    expect(CONVERSATION_SYSTEM_PROMPT).toContain('cycling');
   });
 
-  it('throws when response has no tool_use block', async () => {
-    mockCreate.mockResolvedValue({
-      content: [{ type: 'text', text: 'I cannot help with that.' }],
-    });
+  it('instructs to generate 3 variants', () => {
+    expect(CONVERSATION_SYSTEM_PROMPT).toContain('3 meaningfully different');
+  });
+});
 
-    await expect(extractRouteParams('bad prompt')).rejects.toThrow(
-      'LLM did not return route parameters'
+describe('GENERATE_ROUTES_TOOL', () => {
+  it('has the expected tool name', () => {
+    expect(GENERATE_ROUTES_TOOL.name).toBe('generate_routes');
+  });
+
+  it('requires route_variants in schema', () => {
+    const schema = GENERATE_ROUTES_TOOL.input_schema as Record<string, unknown>;
+    const required = schema.required as string[];
+    expect(required).toContain('route_variants');
+  });
+});
+
+describe('streamConversation', () => {
+  it('yields text_delta events from streaming text', async () => {
+    mockStream.mockReturnValue(
+      createMockStream([
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hello ' } },
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'world' } },
+      ])
     );
+
+    const events: unknown[] = [];
+    for await (const event of streamConversation([{ role: 'user', content: 'hi' }])) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'text_delta', text: 'Hello ' },
+      { type: 'text_delta', text: 'world' },
+      { type: 'end' },
+    ]);
   });
 
-  it('appends user location to prompt when provided', async () => {
-    mockCreate.mockResolvedValue(validToolUseResponse);
+  it('yields tool_use event when Claude calls generate_routes', async () => {
+    const toolInput = {
+      start_location: 'Girona, Spain',
+      start_precision: 'general',
+      target_distance_km: 60,
+      elevation_character: 'hilly',
+      road_preference: 'quiet_roads',
+      route_variants: [],
+      reasoning: 'test',
+    };
 
-    await extractRouteParams('loop from here', {
-      latitude: 41.9794,
-      longitude: 2.8214,
-    });
+    mockStream.mockReturnValue(
+      createMockStream([
+        {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', name: 'generate_routes' },
+        },
+        {
+          type: 'content_block_delta',
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify(toolInput) },
+        },
+        { type: 'content_block_stop' },
+      ])
+    );
 
-    const callArgs = mockCreate.mock.calls[0][0];
-    const userMessage = callArgs.messages[0].content;
-    expect(userMessage).toContain('41.9794');
-    expect(userMessage).toContain('2.8214');
+    const events: unknown[] = [];
+    for await (const event of streamConversation([{ role: 'user', content: 'ride from Girona' }])) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'tool_use', name: 'generate_routes', input: toolInput },
+      { type: 'end' },
+    ]);
   });
 
-  it('does not append location text when user_location is undefined', async () => {
-    mockCreate.mockResolvedValue(validToolUseResponse);
+  it('appends start coordinates to last user message', async () => {
+    mockStream.mockReturnValue(createMockStream([]));
 
-    await extractRouteParams('60km loop from Girona');
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _ of streamConversation([{ role: 'user', content: 'ride' }], undefined, {
+      lat: 41.98,
+      lng: 2.82,
+    })) {
+      // consume
+    }
 
-    const callArgs = mockCreate.mock.calls[0][0];
-    const userMessage = callArgs.messages[0].content;
-    expect(userMessage).toBe('60km loop from Girona');
+    const callArgs = mockStream.mock.calls[0][0];
+    const lastMsg = callArgs.messages[0].content;
+    expect(lastMsg).toContain('41.9800');
+    expect(lastMsg).toContain('2.8200');
   });
 
-  it('forces tool_choice to generate_route_parameters', async () => {
-    mockCreate.mockResolvedValue(validToolUseResponse);
+  it('uses tool_choice auto', async () => {
+    mockStream.mockReturnValue(createMockStream([]));
 
-    await extractRouteParams('any prompt');
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _ of streamConversation([{ role: 'user', content: 'hi' }])) {
+      // consume
+    }
 
-    const callArgs = mockCreate.mock.calls[0][0];
-    expect(callArgs.tool_choice).toEqual({
-      type: 'tool',
-      name: 'generate_route_parameters',
-    });
+    const callArgs = mockStream.mock.calls[0][0];
+    expect(callArgs.tool_choice).toEqual({ type: 'auto' });
   });
 });

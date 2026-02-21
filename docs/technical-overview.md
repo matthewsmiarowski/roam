@@ -17,18 +17,16 @@ Roam is a single Next.js application (App Router, TypeScript) that serves both t
 │                     Next.js App                         │
 │                                                         │
 │  Frontend (React)                                       │
-│  ┌──────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │  Prompt   │  │  MapLibre GL │  │    Elevation       │  │
-│  │  Input    │  │  Map         │  │    Profile Chart   │  │
-│  └──────────┘  └──────────────┘  └───────────────────┘  │
-│  ┌──────────┐  ┌──────────────┐                         │
-│  │  Route   │  │  GPX         │                         │
-│  │  Stats   │  │  Download    │                         │
-│  └──────────┘  └──────────────┘                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │  Chat Panel   │  │  MapLibre GL │  │  Elevation    │  │
+│  │  (messages,   │  │  Map (multi- │  │  Profile      │  │
+│  │   route cards,│  │  route w/    │  │  Chart        │  │
+│  │   input)      │  │  hover)      │  │              │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  │
 │                                                         │
 │  API Routes                                             │
 │  ┌─────────────────────────────────────────────────┐    │
-│  │  POST /api/generate-route                        │    │
+│  │  POST /api/chat (SSE streaming)                  │    │
 │  └──────────────────────┬──────────────────────────┘    │
 │                         │                               │
 └─────────────────────────┼───────────────────────────────┘
@@ -55,98 +53,101 @@ Roam is a single Next.js application (App Router, TypeScript) that serves both t
 ```
 roam/
 ├── app/
-│   ├── page.tsx                 # Main page — the entire UI
+│   ├── page.tsx                 # Main page — chat panel + map layout
 │   ├── layout.tsx               # Root layout
 │   ├── globals.css              # Tailwind + design system tokens (CSS custom properties)
 │   └── api/
-│       └── generate-route/
-│           └── route.ts         # POST handler — orchestrates LLM + routing
-├── components/                  # React components
+│       └── chat/
+│           └── route.ts         # POST handler — SSE streaming chat endpoint
+├── components/                  # React components (chat UI, map, route cards, etc.)
 ├── lib/                         # Pure TypeScript modules (no framework dependency)
-│   ├── llm.ts                   # Claude API integration
+│   ├── llm.ts                   # Claude API — conversational streaming with tool_choice: auto
+│   ├── conversation.ts          # Orchestrator — ties LLM, geocoding, and parallel route generation
+│   ├── conversation-state.ts    # Reducer + actions for conversation state (pure logic)
+│   ├── use-chat.ts              # Custom React hook — SSE connection + state dispatch
 │   ├── routing.ts               # GraphHopper integration + loop generation
 │   ├── geocoding.ts             # Nominatim geocoding
 │   ├── gpx.ts                   # GPX XML generation
 │   ├── geo.ts                   # Haversine, point projection, etc.
-│   └── types.ts                 # Shared types (request, response, route data)
+│   └── types.ts                 # Shared types (messages, route options, state, actions)
 ├── docs/                        # Project documentation
 ├── project-overview/            # Product planning docs (PRD, tech plan)
 └── public/                      # Static assets
 ```
 
-All backend logic lives in `lib/` as pure TypeScript modules with no framework dependency. The API route in `app/api/generate-route/route.ts` is a thin orchestrator that calls into these modules. This keeps the logic testable and portable.
+All backend logic lives in `lib/` as pure TypeScript modules with no framework dependency (except `use-chat.ts` which is a React hook). The API route in `app/api/chat/route.ts` is a thin orchestrator that calls into these modules. This keeps the logic testable and portable.
 
 ---
 
 ## Request Flow
 
-When a user submits a prompt, the following happens:
+The app uses a conversational model. The user sends messages, and the LLM decides whether to ask clarifying questions (text response) or generate routes (tool call). The frontend sends the full conversation history with each request; the server is stateless.
 
 ```
-Browser → POST /api/generate-route
-  1. Claude API (tool use) → structured route params + waypoint bearings + start precision
-  2. Resolve start coordinates (explicit coords → GPS → geocoding)
-  3. Loop generation: compass bearings + radius → waypoints
-  4. GraphHopper Directions API → route geometry + elevation
-  5. Distance validation, retry up to 3x if outside ±20%
-  6. Return GeoJSON geometry + GPX string + stats
+Browser → POST /api/chat (SSE streaming)
+  For each conversation turn:
+  1. Claude API (streaming, tool_choice: auto) → text deltas OR tool call
+  2. If text: stream text chunks back to client
+  3. If tool call (generate_routes):
+     a. Resolve start coordinates (explicit coords → GPS → geocoding)
+     b. Geocode named waypoints across all 3 variants
+     c. Generate 3 routes in parallel (single GraphHopper call each)
+     d. Stream route options back to client
 ```
 
 ### API Contract
 
-**Endpoint:** `POST /api/generate-route`
+**Endpoint:** `POST /api/chat`
 
 **Request:**
 
 ```json
 {
-  "prompt": "A 60km hilly loop from central Girona on quiet roads",
-  "user_location": {
-    "latitude": 41.9794,
-    "longitude": 2.8214
-  },
+  "messages": [{ "role": "user", "content": "60km hilly loop from Girona" }],
+  "user_location": { "latitude": 41.9794, "longitude": 2.8214 },
   "start_coordinates": { "lat": 41.9794, "lng": 2.8214 }
 }
 ```
 
-**Response:**
+**Response:** Server-Sent Events stream:
 
-```json
-{
-  "route": {
-    "geometry": [[lat, lng, elevation], ...],
-    "distance_km": 62.3,
-    "distance_mi": 38.7,
-    "elevation_gain_m": 890,
-    "elevation_gain_ft": 2920,
-    "start_point": { "lat": 41.9794, "lng": 2.8214 }
+```
+event: text
+data: {"chunk": "Great choice! Girona has amazing cycling..."}
+
+event: generating
+data: {"message": "Generating route options..."}
+
+event: routes
+data: {"options": [
+  {
+    "id": "uuid",
+    "name": "Northern Hills Loop",
+    "description": "Climbs toward the Gavarres hills...",
+    "route": { "geometry": [...], "distance_km": 62.3, ... },
+    "gpx": "<gpx>...</gpx>",
+    "color": "#E8503A"
   },
-  "gpx": "<gpx>...</gpx>",
-  "metadata": {
-    "parsed_params": {
-      "start_location": "Central Girona, Spain",
-      "start_precision": "general",
-      "target_distance_km": 60,
-      "elevation_character": "hilly",
-      "road_preference": "quiet_roads"
-    },
-    "llm_reasoning": "Routing north and west from Girona toward the Gavarres hills..."
-  }
-}
+  ...
+]}
+
+event: done
+data: {}
 ```
 
-Errors return `{ status: "error", message: string }`.
+Error events: `event: error` with `{"message": "..."}`.
+Non-streaming errors return `{ status: "error", message: string }` with HTTP 400.
 
 ---
 
 ## External Services
 
-| Service                    | Purpose                               | Env var                        | Notes                                                                             |
-| -------------------------- | ------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------- |
-| Claude (claude-sonnet-4-6) | NL → structured params via tool use   | `ANTHROPIC_API_KEY`            | Server-side only. ~$0.01-0.03 per route.                                          |
-| GraphHopper Directions API | Cycling route computation + elevation | `GRAPHHOPPER_API_KEY`          | Server-side only. 500 req/day free tier. Cycling profile, returns 3D coordinates. |
-| MapTiler                   | Vector map tiles for MapLibre GL      | `NEXT_PUBLIC_MAPTILER_API_KEY` | Client-side. 100k tile requests/month free tier.                                  |
-| Nominatim (OpenStreetMap)  | Geocoding (location string → lat/lng) | None                           | Free, rate-limited to 1 req/sec.                                                  |
+| Service                    | Purpose                                         | Env var                        | Notes                                                                             |
+| -------------------------- | ----------------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------- |
+| Claude (claude-sonnet-4-6) | Conversational routing via streaming + tool use | `ANTHROPIC_API_KEY`            | Server-side only. ~$0.01-0.03 per conversation turn.                              |
+| GraphHopper Directions API | Cycling route computation + elevation           | `GRAPHHOPPER_API_KEY`          | Server-side only. 500 req/day free tier. Cycling profile, returns 3D coordinates. |
+| MapTiler                   | Vector map tiles for MapLibre GL                | `NEXT_PUBLIC_MAPTILER_API_KEY` | Client-side. 100k tile requests/month free tier.                                  |
+| Nominatim (OpenStreetMap)  | Geocoding (location string → lat/lng)           | None                           | Free, rate-limited to 1 req/sec.                                                  |
 
 ---
 
@@ -156,15 +157,20 @@ This is the hardest problem in the system. Most routing engines only do A-to-B. 
 
 ### How the LLM is used
 
-The LLM does three jobs in a single tool-use call:
+Claude operates in conversational mode (`tool_choice: auto`), deciding per turn whether to ask clarifying questions (text response) or generate routes (tool call). The system prompt instructs it to act like a knowledgeable cycling friend and generate immediately when enough info exists (at minimum: a location).
 
-1. **Parameter extraction** — parse the prompt into structured data (start location, target distance, elevation character, road preference)
-2. **Geographic reasoning** — suggest exactly 3 compass bearings for waypoint placement based on terrain knowledge of the area (e.g., knowing hills are north of Girona, not east toward the coast)
-3. **Start precision classification** — outputs `start_precision: "exact" | "general"` to indicate whether the user wants a precise start point (specific address, landmark, "from here") or a general area (city, region)
+When Claude calls the `generate_routes` tool, it outputs:
+
+1. **Ride parameters** — start location, target distance, elevation character, road preference
+2. **3 route variants** — each with a name, description, and 3 compass bearings for waypoint placement based on terrain knowledge. Variants are meaningfully different (vary direction, difficulty, local knowledge).
+3. **Named waypoints** (optional) — when the user mentions specific places or climbs, Claude includes geocodable location strings that the routing system uses.
+4. **Start precision classification** — `"exact" | "general"` to indicate whether the start is a specific address or a general area.
 
 The key insight: we ask for **directions** (compass bearings), not coordinates. The LLM can reason about direction from geographic knowledge. It would hallucinate exact coordinates.
 
 When `start_precision` is "general", the LLM produces simple, geocoder-friendly location strings ("City, Country" format). When "exact", it preserves the user's specific address or landmark verbatim for accurate geocoding. The Anthropic SDK is configured with `maxRetries: 5` to handle transient 529 overloaded errors.
+
+Conversation history (capped at 20 messages) is sent with each request. Route results in history are summarized as text (names + stats, not full geometry) to keep tokens reasonable.
 
 ### Start coordinate resolution
 
@@ -176,12 +182,19 @@ The API route resolves the start point using a three-tier priority:
 
 ### The algorithm
 
-1. Resolve start coordinates via the priority above → `(lat, lng)`
-2. Calculate waypoint radius: `radius_km = target_distance_km / (2π × stretch_factor)` where `stretch_factor ≈ 1.3` accounts for roads not being straight lines
-3. Place 3 waypoints: for each bearing in `waypoint_bearings`, project a point at `radius_km` distance from start along that bearing (capped at 3 to stay within GraphHopper free tier's 5-point limit: start + 3 waypoints + start)
-4. Route through waypoints via GraphHopper: `start → wp1 → wp2 → wp3 → start` using the cycling profile
-5. Validate total distance: if within ±20% of target, accept. Otherwise adjust radius proportionally and retry (max 3 iterations)
-6. Return the final route geometry, elevation data, and stats
+For each of the 3 route variants (generated in parallel):
+
+1. Resolve start coordinates via the priority above → `(lat, lng)` (shared across all variants)
+2. Geocode named waypoints (if any) across all variants — deduplicated to avoid redundant geocoding calls
+3. Merge named and bearing-based waypoints: named waypoints take priority, remaining slots filled by bearing waypoints (capped at 3 total to stay within GraphHopper free tier's 5-point limit: start + 3 waypoints + start)
+4. Calculate waypoint radius: `radius_km = target_distance_km / (2π × stretch_factor)` where `stretch_factor ≈ 1.3` accounts for roads not being straight lines
+5. Place bearing-based waypoints: project points at `radius_km` distance from start along each bearing
+6. Route through waypoints via GraphHopper: `start → wp1 → wp2 → wp3 → start` using the cycling profile
+7. Return the route geometry, elevation data, and stats
+
+Each variant gets a single GraphHopper call (no retry loop in comparison mode). Failed variants are excluded — at least 1 successful route is required or an error is thrown. This conserves the GraphHopper free tier budget (~160 conversations/day at 3 calls each).
+
+The full retry loop (distance validation, up to 3 iterations) is still available via the `generateRoute` function for future single-route use cases.
 
 ### Geocoding
 
@@ -212,41 +225,57 @@ The `bike` profile avoids highways, prefers cycling infrastructure, and penalize
 
 ### State management
 
-No state library. Page-level `useState`/`useReducer` with a discriminated union:
+No state library. A `useReducer` with a conversation state machine manages the entire UI:
 
 ```typescript
-type AppState =
-  | { status: 'idle' }
-  | { status: 'loading'; prompt: string }
-  | {
-      status: 'success';
-      route: RouteData;
-      gpx: string;
-      metadata: GenerateRouteResponse['metadata'];
-    }
-  | { status: 'error'; message: string };
+interface ConversationState {
+  phase: 'chatting' | 'generating' | 'options' | 'detail';
+  messages: Message[];
+  streamingText: string | null;
+  routeOptions: RouteOption[] | null;
+  selectedRouteIndex: number | null;
+  userLocation: { latitude: number; longitude: number } | null;
+  startPoint: { lat: number; lng: number } | null;
+}
 ```
+
+Phase transitions:
+
+```
+chatting → [send message] → generating
+generating → [AI asks question] → chatting
+generating → [routes ready] → options
+options → [select route] → detail
+options → [send message] → generating
+detail → [back] → options
+detail → [send message] → generating
+```
+
+The reducer (`lib/conversation-state.ts`) is pure logic with no React dependency — fully testable. The custom hook (`lib/use-chat.ts`) manages the SSE connection and dispatches actions.
 
 No client-side routing. Single page, single flow.
 
 ### Components
 
-- **PromptInput** — text input + submit button
-- **LoadingState** — shown during route generation
-- **RouteMap** — MapLibre GL map with route polyline, start marker, and click-to-set-start interaction (via react-map-gl)
-- **ElevationProfile** — Recharts area chart (elevation vs distance)
-- **RouteStats** — distance and elevation gain display
-- **GpxDownload** — triggers browser download via `URL.createObjectURL`
-- **StartPointBadge** — pill showing map-clicked start coordinates with a clear button
-- **ErrorDisplay** — shown on failure
+- **ChatPanel** — left-side container (400px): message list, route cards, typing indicator, route detail, input bar
+- **ChatMessage** — single message bubble (user right-aligned, assistant left-aligned). Can embed route cards.
+- **ChatInput** — auto-resizing textarea + send button, pinned to bottom of chat panel
+- **TypingIndicator** — three-dot pulse animation shown while waiting for AI response
+- **RouteCardGroup** — container for 3 route option cards within a chat message
+- **RouteCard** — compact card: color swatch, name, distance, elevation, time estimate, difficulty badge. Hover highlights route on map.
+- **RouteDetail** — full stats, GPX download, "back to options" link. Shown inline in chat when a route is selected.
+- **RouteMap** — MapLibre GL map supporting multi-route rendering with distinct colors and hover-highlight. Also handles map-click start point.
+- **ElevationProfile** — Recharts area chart (elevation vs distance). Docked to bottom of map area when a route is selected.
+- **RouteStats** — distance and elevation gain display (used inside RouteDetail)
+- **GpxDownload** — triggers browser download via `URL.createObjectURL`. Supports custom filename per route.
 
-### Geolocation fallback
+### Geolocation
 
-When no start location is in the prompt, the frontend requests browser geolocation. If denied, the user is asked to include a location in their prompt.
+The `useChat` hook requests browser geolocation once on mount. If denied, the user can still provide a location in their message or click the map.
 
 ### GPX export
 
-GPX XML is returned inline in the API response. The frontend creates a Blob and triggers download. No separate endpoint, no server-side storage.
+GPX XML is returned inline with each route option. The frontend creates a Blob and triggers download with a route-name-based filename (e.g., `roam-northern-hills.gpx`). No separate endpoint, no server-side storage.
 
 ---
 
@@ -281,13 +310,14 @@ GPX XML is returned inline in the API response. The frontend creates a Blob and 
 
 ---
 
-## Known Limitations (v0)
+## Known Limitations
 
-- No caching — every identical prompt generates a new route
+- No caching — every conversation turn generates fresh routes
 - No rate limiting on the API route
 - No route persistence or database
 - No user accounts or authentication
 - Loop quality is heuristic — can feel geometric rather than organic
 - Elevation targeting is indirect — relies on LLM geographic knowledge
-- GraphHopper free tier: 500 routes/day
+- GraphHopper free tier: 500 routes/day (~160 conversations at 3 routes each)
 - Vercel Hobby plan: 10-second function timeout (may need Pro for deployment)
+- Desktop-only layout — chat panel is fixed 400px, no responsive breakpoints yet
