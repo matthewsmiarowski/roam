@@ -39,10 +39,7 @@ export async function POST(request: NextRequest) {
       // Explicit coordinates from map click — highest priority
       start = body.start_coordinates;
       console.log('Using explicit start coordinates:', start);
-    } else if (
-      params.start_precision === 'exact' &&
-      body.user_location
-    ) {
+    } else if (params.start_precision === 'exact' && body.user_location) {
       // User said "from here" / "from my location" + GPS available
       start = { lat: body.user_location.latitude, lng: body.user_location.longitude };
       console.log('Using GPS coordinates (exact + user_location):', start);
@@ -68,6 +65,7 @@ export async function POST(request: NextRequest) {
       metadata: {
         parsed_params: {
           start_location: params.start_location,
+          start_precision: params.start_precision,
           target_distance_km: params.target_distance_km,
           elevation_character: params.elevation_character,
           road_preference: params.road_preference,
@@ -88,6 +86,12 @@ export async function POST(request: NextRequest) {
     } else if (message.includes('LLM did not return')) {
       userMessage =
         "I couldn't understand that request. Try describing your ride with a starting location and distance.";
+    } else if (message.includes('Start location is not near any routable roads')) {
+      userMessage =
+        "The start point isn't near any roads. Try moving it further from the water or coastline.";
+    } else if (message.includes('Could not find routable roads for waypoints')) {
+      const locationHint = parsedLocation ? ` near "${parsedLocation}"` : '';
+      userMessage = `Couldn't generate a cycling route${locationHint} — the area may be too close to the coastline. Try starting further inland.`;
     } else if (message.includes('GraphHopper')) {
       const locationHint = parsedLocation ? ` (routing near "${parsedLocation}")` : '';
       const statusMatch = message.match(/GraphHopper error (\d+)/);

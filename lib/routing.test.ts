@@ -291,19 +291,30 @@ describe('generateRoute', () => {
 
   it('prefers non-star result over closer distance match', async () => {
     const radiusKm = calculateRadius(60);
-    const loopCenter = projectPoint(girona, loopDirection, radiusKm);
-    const starCoords = makeStarCoords(loopCenter, radiusKm, girona);
-    const loopCoords = makeLoopCoords(loopCenter, radiusKm, girona);
 
-    // Attempt 1: perfect distance but star-shaped
-    // Attempt 2: still star (rotated but still star)
-    // Attempt 3: non-star but 70km (within tolerance)
-    // Attempt 4: star again
+    // Loop center rotates by STAR_BEARING_ROTATION (30°) each time a star is detected.
+    // Generate star/loop coords matching each attempt's rotated center.
+    const center0 = projectPoint(girona, (loopDirection + 0) % 360, radiusKm);
+    const center1 = projectPoint(girona, (loopDirection + 30) % 360, radiusKm);
+    const center2 = projectPoint(girona, (loopDirection + 60) % 360, radiusKm);
+
+    // Attempt 0: perfect distance but star-shaped
+    // Attempt 1: still star (rotated center, star coords match)
+    // Attempt 2: non-star loop at 70km (within tolerance)
+    // Attempt 3: star again (won't be reached)
     mockFetch
-      .mockResolvedValueOnce(makeGraphHopperResponse(60000, { coordinates: starCoords }))
-      .mockResolvedValueOnce(makeGraphHopperResponse(55000, { coordinates: starCoords }))
-      .mockResolvedValueOnce(makeGraphHopperResponse(70000, { coordinates: loopCoords }))
-      .mockResolvedValueOnce(makeGraphHopperResponse(60000, { coordinates: starCoords }));
+      .mockResolvedValueOnce(
+        makeGraphHopperResponse(60000, { coordinates: makeStarCoords(center0, radiusKm, girona) })
+      )
+      .mockResolvedValueOnce(
+        makeGraphHopperResponse(55000, { coordinates: makeStarCoords(center1, radiusKm, girona) })
+      )
+      .mockResolvedValueOnce(
+        makeGraphHopperResponse(70000, { coordinates: makeLoopCoords(center2, radiusKm, girona) })
+      )
+      .mockResolvedValueOnce(
+        makeGraphHopperResponse(60000, { coordinates: makeStarCoords(center2, radiusKm, girona) })
+      );
 
     const route = await generateRoute(baseParams, girona);
 
@@ -369,5 +380,113 @@ describe('generateRoute', () => {
     expect(haversine(wp1, expected1)).toBeLessThan(0.1);
     expect(haversine(wp2, expected2)).toBeLessThan(0.1);
     expect(haversine(wp3, expected3)).toBeLessThan(0.1);
+  });
+
+  // --- PointNotFound (coastline/water) tests ---
+
+  function makePointNotFoundResponse(pointIndex: number) {
+    return {
+      ok: false,
+      status: 400,
+      text: async () =>
+        JSON.stringify({
+          message: `Cannot find point ${pointIndex}: 38.91,0.14`,
+          hints: [
+            {
+              point_index: pointIndex,
+              details: 'com.graphhopper.util.exceptions.PointNotFoundException',
+            },
+          ],
+        }),
+    };
+  }
+
+  it('retries with rotated bearings when a waypoint lands in water', async () => {
+    mockFetch
+      .mockResolvedValueOnce(makePointNotFoundResponse(2))
+      .mockResolvedValueOnce(makeGraphHopperResponse(60000));
+
+    const route = await generateRoute(baseParams, girona);
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(route.distance_km).toBe(60);
+
+    // Verify second call used different waypoints (rotated bearings)
+    const firstBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const secondBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(secondBody.points[1]).not.toEqual(firstBody.points[1]);
+  });
+
+  it('throws immediately when start point is in water (point_index 0)', async () => {
+    mockFetch.mockResolvedValue(makePointNotFoundResponse(0));
+
+    await expect(generateRoute(baseParams, girona)).rejects.toThrow(
+      'Start location is not near any routable roads'
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws coastline error when all retries hit water', async () => {
+    mockFetch.mockResolvedValue(makePointNotFoundResponse(2));
+
+    await expect(generateRoute(baseParams, girona)).rejects.toThrow(
+      'Could not find routable roads for waypoints'
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(8);
+  });
+
+  it('PointNotFound retries do not consume distance/star retry budget', async () => {
+    // PointNotFound hits (2) + distance retries (4 = initial + MAX_RETRIES)
+    // Water, water, then 4 attempts all too long
+    mockFetch
+      .mockResolvedValueOnce(makePointNotFoundResponse(1))
+      .mockResolvedValueOnce(makePointNotFoundResponse(2))
+      .mockResolvedValueOnce(makeGraphHopperResponse(90000))
+      .mockResolvedValueOnce(makeGraphHopperResponse(90000))
+      .mockResolvedValueOnce(makeGraphHopperResponse(90000))
+      .mockResolvedValueOnce(makeGraphHopperResponse(90000));
+
+    const route = await generateRoute(baseParams, girona);
+
+    // 2 PointNotFound + 4 routing attempts = 6 total calls
+    expect(mockFetch).toHaveBeenCalledTimes(6);
+    expect(route.distance_km).toBe(90);
+  });
+
+  it('rotates loop center along with waypoint bearings on PointNotFound retry', async () => {
+    mockFetch
+      .mockResolvedValueOnce(makePointNotFoundResponse(2))
+      .mockResolvedValueOnce(makeGraphHopperResponse(60000));
+
+    await generateRoute(baseParams, girona);
+
+    const firstBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const secondBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+
+    // Compute centroid of waypoints (indices 1 to length-2, excluding start and return-to-start)
+    const centroid = (points: number[][]) => {
+      const wps = points.slice(1, -1);
+      const avgLng = wps.reduce((s, p) => s + p[0], 0) / wps.length;
+      const avgLat = wps.reduce((s, p) => s + p[1], 0) / wps.length;
+      return { lat: avgLat, lng: avgLng };
+    };
+
+    const center1 = centroid(firstBody.points);
+    const center2 = centroid(secondBody.points);
+
+    // The loop center should have shifted because effectiveLoopDirection rotated by 45°
+    const shift = haversine(center1, center2);
+    expect(shift).toBeGreaterThan(0.5); // at least 500m shift
+  });
+
+  it('non-PointNotFound GraphHopper errors still propagate immediately', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal server error',
+    });
+
+    await expect(generateRoute(baseParams, girona)).rejects.toThrow('GraphHopper error 500');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });

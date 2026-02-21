@@ -15,8 +15,20 @@ const DISTANCE_TOLERANCE = 0.2;
 const MAX_RETRIES = 3;
 const MAX_WAYPOINTS = 3; // GraphHopper free tier allows max 5 points total (start + 3 waypoints + start)
 const STAR_BEARING_ROTATION = 30;
+const MAX_POINT_NOT_FOUND_RETRIES = 7;
+const POINT_NOT_FOUND_RADIUS_SHRINK = 0.95;
+const POINT_NOT_FOUND_BEARING_ROTATION = 45;
 const KM_TO_MI = 0.621371;
 const M_TO_FT = 3.28084;
+
+class PointNotFoundError extends Error {
+  readonly pointIndex: number;
+  constructor(message: string, pointIndex: number) {
+    super(message);
+    this.name = 'PointNotFoundError';
+    this.pointIndex = pointIndex;
+  }
+}
 
 interface GraphHopperPath {
   distance: number;
@@ -80,6 +92,11 @@ async function callGraphHopper(points: LatLng[]): Promise<GraphHopperResponse> {
 
   if (!res.ok) {
     const text = await res.text();
+    if (text.includes('PointNotFoundException') || text.includes('Cannot find point')) {
+      const indexMatch = text.match(/Cannot find point (\d+)/);
+      const pointIndex = indexMatch ? parseInt(indexMatch[1], 10) : -1;
+      throw new PointNotFoundError(`GraphHopper error ${res.status}: ${text}`, pointIndex);
+    }
     throw new Error(`GraphHopper error ${res.status}: ${text}`);
   }
 
@@ -151,22 +168,56 @@ export async function generateRoute(params: RouteParams, start: LatLng): Promise
   let bestLoopDistanceDelta = Infinity;
 
   let bearingRotation = 0;
+  let pointNotFoundRetries = 0;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const bearings =
       bearingRotation === 0 ? baseBearings : rotateBearings(baseBearings, bearingRotation);
 
+    // Rotate loop direction with bearings so the entire loop swings around
+    // start — critical for coastal areas where the original direction may
+    // point toward water.
+    const effectiveLoopDirection = (loopDirection + bearingRotation) % 360;
+
     // Offset center so start sits on the circumference
-    const loopCenter = projectPoint(start, loopDirection, radiusKm);
+    const loopCenter = projectPoint(start, effectiveLoopDirection, radiusKm);
 
     // Sort bearings clockwise from start's position for clean traversal
-    const startAngle = (loopDirection + 180) % 360;
+    const startAngle = (effectiveLoopDirection + 180) % 360;
     const sortedBearings = sortBearingsClockwise(bearings, startAngle);
 
     const waypoints = generateWaypoints(loopCenter, sortedBearings, radiusKm);
     const allPoints = [start, ...waypoints];
 
-    const ghResponse = await callGraphHopper(allPoints);
+    let ghResponse: GraphHopperResponse;
+    try {
+      ghResponse = await callGraphHopper(allPoints);
+    } catch (error) {
+      if (error instanceof PointNotFoundError) {
+        // Start point itself is in water — no retry will help
+        if (error.pointIndex === 0 || error.pointIndex === allPoints.length) {
+          throw new Error(
+            'Start location is not near any routable roads. Try a different starting point.'
+          );
+        }
+        // A waypoint landed in water — rotate bearings and shrink radius
+        // Uses its own retry budget so distance/star retries aren't consumed
+        if (pointNotFoundRetries >= MAX_POINT_NOT_FOUND_RETRIES) {
+          throw new Error(
+            'Could not find routable roads for waypoints in this area. ' +
+              'The location may be too close to water or the coastline. ' +
+              'Try starting further inland or in a different area.'
+          );
+        }
+        pointNotFoundRetries++;
+        bearingRotation += POINT_NOT_FOUND_BEARING_ROTATION;
+        radiusKm *= POINT_NOT_FOUND_RADIUS_SHRINK;
+        attempt--; // Don't count toward routing retry budget
+        continue;
+      }
+      throw error;
+    }
+
     const result = parseGraphHopperResponse(ghResponse);
 
     const ratio = result.distance_km / params.target_distance_km;
@@ -198,6 +249,15 @@ export async function generateRoute(params: RouteParams, start: LatLng): Promise
 
     // Adjust radius proportionally for distance convergence
     radiusKm = radiusKm / ratio;
+  }
+
+  // All attempts exhausted
+  if (!bestResult && !bestLoopResult) {
+    throw new Error(
+      'Could not find routable roads for waypoints in this area. ' +
+        'The location may be too close to water or the coastline. ' +
+        'Try starting further inland or in a different area.'
+    );
   }
 
   // Prefer a non-star result even if distance is slightly worse

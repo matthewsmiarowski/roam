@@ -6,9 +6,10 @@ import { Send } from 'lucide-react';
 interface PromptInputProps {
   onSubmit: (prompt: string) => void;
   disabled?: boolean;
+  placeholder?: string;
 }
 
-export function PromptInput({ onSubmit, disabled }: PromptInputProps) {
+export function PromptInput({ onSubmit, disabled, placeholder }: PromptInputProps) {
   const [value, setValue] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -26,7 +27,7 @@ export function PromptInput({ onSubmit, disabled }: PromptInputProps) {
           type="text"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder='Describe your ride — e.g., "60km hilly loop from Girona"'
+          placeholder={placeholder ?? 'Describe your ride — e.g., "60km hilly loop from Girona"'}
           disabled={disabled}
           aria-label="Describe your ride"
           className="flex-1 bg-transparent text-[15px] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-50"

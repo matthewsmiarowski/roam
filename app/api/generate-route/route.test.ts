@@ -140,9 +140,7 @@ describe('POST /api/generate-route', () => {
     mockGpx.mockReturnValue('<gpx/>');
 
     const startCoords = { lat: 42.123, lng: 2.456 };
-    await POST(
-      makeRequest({ prompt: 'ride from here', start_coordinates: startCoords }) as never
-    );
+    await POST(makeRequest({ prompt: 'ride from here', start_coordinates: startCoords }) as never);
 
     expect(mockGeocode).not.toHaveBeenCalled();
     expect(mockGenerate).toHaveBeenCalledWith(sampleParams, startCoords);
@@ -155,9 +153,7 @@ describe('POST /api/generate-route', () => {
     mockGpx.mockReturnValue('<gpx/>');
 
     const userLocation = { latitude: 41.9, longitude: 2.8 };
-    await POST(
-      makeRequest({ prompt: 'ride from here', user_location: userLocation }) as never
-    );
+    await POST(makeRequest({ prompt: 'ride from here', user_location: userLocation }) as never);
 
     expect(mockGeocode).not.toHaveBeenCalled();
     expect(mockGenerate).toHaveBeenCalledWith(exactParams, { lat: 41.9, lng: 2.8 });
@@ -185,5 +181,39 @@ describe('POST /api/generate-route', () => {
     await POST(makeRequest({ prompt: '60km ride around Girona' }) as never);
 
     expect(mockGeocode).toHaveBeenCalledWith('Girona, Catalonia, Spain');
+  });
+
+  it('returns coastline error when waypoints land in water', async () => {
+    mockExtract.mockResolvedValue(sampleParams);
+    mockGeocode.mockResolvedValue({ lat: 41.9794, lng: 2.8214 });
+    mockGenerate.mockRejectedValue(
+      new Error(
+        'Could not find routable roads for waypoints in this area. ' +
+          'The location may be too close to water or the coastline. ' +
+          'Try starting further inland or in a different area.'
+      )
+    );
+
+    const res = await POST(makeRequest({ prompt: '60km from coast' }) as never);
+
+    expect(res.status).toBe(500);
+    const data = await res.json();
+    expect(data.message).toContain('coastline');
+    expect(data.message).toContain('further inland');
+  });
+
+  it('returns start-in-water error when start point is unroutable', async () => {
+    mockExtract.mockResolvedValue(sampleParams);
+    mockGeocode.mockResolvedValue({ lat: 38.84, lng: 0.09 });
+    mockGenerate.mockRejectedValue(
+      new Error('Start location is not near any routable roads. Try a different starting point.')
+    );
+
+    const res = await POST(makeRequest({ prompt: 'ride from the ocean' }) as never);
+
+    expect(res.status).toBe(500);
+    const data = await res.json();
+    expect(data.message).toContain('start point');
+    expect(data.message).toContain('water');
   });
 });
