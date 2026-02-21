@@ -6,7 +6,7 @@
  * GraphHopper, and validates distance with retry.
  */
 
-import { type LatLng, projectPoint } from './geo';
+import { type LatLng, projectPoint, isStarShaped } from './geo';
 import type { RouteParams, RouteData, Coordinate3D } from './types';
 
 const GRAPHHOPPER_BASE = 'https://graphhopper.com/api/1/route';
@@ -14,6 +14,7 @@ const STRETCH_FACTOR = 1.3;
 const DISTANCE_TOLERANCE = 0.2;
 const MAX_RETRIES = 3;
 const MAX_WAYPOINTS = 3; // GraphHopper free tier allows max 5 points total (start + 3 waypoints + start)
+const STAR_BEARING_ROTATION = 30;
 const KM_TO_MI = 0.621371;
 const M_TO_FT = 3.28084;
 
@@ -104,42 +105,103 @@ function parseGraphHopperResponse(gh: GraphHopperResponse): {
   };
 }
 
+function rotateBearings(bearings: number[], offsetDeg: number): number[] {
+  return bearings.map((b) => (b + offsetDeg) % 360);
+}
+
+/**
+ * Sort bearings clockwise from a given starting angle.
+ * Ensures clean loop traversal without figure-8 crossings.
+ */
+function sortBearingsClockwise(bearings: number[], startAngle: number): number[] {
+  return [...bearings].sort((a, b) => {
+    const aOffset = (a - startAngle + 360) % 360;
+    const bOffset = (b - startAngle + 360) % 360;
+    return aOffset - bOffset;
+  });
+}
+
 /**
  * Generate a cycling route loop.
+ *
+ * The loop center is offset from start so that start sits on the
+ * circumference rather than at the hub. This produces natural cycling
+ * loops where the rider goes out, around, and back — instead of
+ * radiating through the center.
+ *
+ * Retries up to MAX_RETRIES times to achieve both:
+ *  - Distance within ±DISTANCE_TOLERANCE of target
+ *  - Non-star-shaped geometry (route doesn't cut through loop center)
+ *
+ * When a star pattern is detected, bearings are rotated to shift waypoints
+ * onto different road segments. The best loop-shaped result is preferred
+ * over a closer-distance star-shaped result.
  *
  * @throws {Error} if GraphHopper fails or returns no paths
  */
 export async function generateRoute(params: RouteParams, start: LatLng): Promise<RouteData> {
   let radiusKm = calculateRadius(params.target_distance_km);
-  let lastResult: {
-    geometry: Coordinate3D[];
-    distance_km: number;
-    elevation_gain_m: number;
-  } | null = null;
+  const baseBearings = params.waypoint_bearings.slice(0, MAX_WAYPOINTS);
+  const loopDirection = baseBearings[0];
 
-  // Limit to MAX_WAYPOINTS bearings (GraphHopper free tier: 5 points max = start + 3 + start)
-  const bearings = params.waypoint_bearings.slice(0, MAX_WAYPOINTS);
+  type ParsedResult = { geometry: Coordinate3D[]; distance_km: number; elevation_gain_m: number };
+  let bestResult: ParsedResult | null = null;
+  let bestDistanceDelta = Infinity;
+  let bestLoopResult: ParsedResult | null = null;
+  let bestLoopDistanceDelta = Infinity;
+
+  let bearingRotation = 0;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const waypoints = generateWaypoints(start, bearings, radiusKm);
+    const bearings =
+      bearingRotation === 0 ? baseBearings : rotateBearings(baseBearings, bearingRotation);
+
+    // Offset center so start sits on the circumference
+    const loopCenter = projectPoint(start, loopDirection, radiusKm);
+
+    // Sort bearings clockwise from start's position for clean traversal
+    const startAngle = (loopDirection + 180) % 360;
+    const sortedBearings = sortBearingsClockwise(bearings, startAngle);
+
+    const waypoints = generateWaypoints(loopCenter, sortedBearings, radiusKm);
     const allPoints = [start, ...waypoints];
 
     const ghResponse = await callGraphHopper(allPoints);
     const result = parseGraphHopperResponse(ghResponse);
-    lastResult = result;
 
     const ratio = result.distance_km / params.target_distance_km;
+    const distanceDelta = Math.abs(ratio - 1);
+    const distanceOk = distanceDelta <= DISTANCE_TOLERANCE;
+    const starShaped = isStarShaped(result.geometry, loopCenter, radiusKm);
 
-    if (Math.abs(ratio - 1) <= DISTANCE_TOLERANCE) {
+    // Track best overall result (by distance)
+    if (distanceDelta < bestDistanceDelta) {
+      bestDistanceDelta = distanceDelta;
+      bestResult = result;
+    }
+
+    // Track best non-star result (by distance)
+    if (!starShaped && distanceDelta < bestLoopDistanceDelta) {
+      bestLoopDistanceDelta = distanceDelta;
+      bestLoopResult = result;
+    }
+
+    // Accept if both distance and shape are good
+    if (distanceOk && !starShaped) {
       return buildRouteData(result, start);
     }
 
-    // Adjust radius proportionally for next attempt
+    // Rotate bearings on star detection for next attempt
+    if (starShaped) {
+      bearingRotation += STAR_BEARING_ROTATION;
+    }
+
+    // Adjust radius proportionally for distance convergence
     radiusKm = radiusKm / ratio;
   }
 
-  // Return best attempt if we couldn't converge
-  return buildRouteData(lastResult!, start);
+  // Prefer a non-star result even if distance is slightly worse
+  return buildRouteData((bestLoopResult ?? bestResult)!, start);
 }
 
 function buildRouteData(

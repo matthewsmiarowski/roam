@@ -257,15 +257,15 @@ GPX XML is returned inline in the API response. The frontend creates a Blob and 
 
 ## Error Handling
 
-| Failure                 | User message                                    | Server behavior                                            |
-| ----------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
-| LLM can't parse prompt  | "I couldn't understand that request..."         | Log raw prompt and LLM response                            |
-| Geocoding fails         | "I couldn't find that location..."              | Log the location string; tries simplified variants first   |
-| No route found          | "Couldn't generate a route in that area..."     | Log waypoints and engine response                          |
-| Routing engine timeout  | "Route generation timed out..."                 | 30-second timeout on GraphHopper calls                     |
-| Distance can't converge | Return best attempt with a note                 | "Route is Xkm — couldn't exactly match your target of Ykm" |
-| LLM overloaded (529)    | "The AI service is temporarily busy..."         | Anthropic SDK retries up to 5× with exponential backoff    |
-| API rate limit (429)    | "Service is temporarily busy..."                | Log for monitoring                                         |
+| Failure                 | User message                                | Server behavior                                            |
+| ----------------------- | ------------------------------------------- | ---------------------------------------------------------- |
+| LLM can't parse prompt  | "I couldn't understand that request..."     | Log raw prompt and LLM response                            |
+| Geocoding fails         | "I couldn't find that location..."          | Log the location string; tries simplified variants first   |
+| No route found          | "Couldn't generate a route in that area..." | Log waypoints and engine response                          |
+| Routing engine timeout  | "Route generation timed out..."             | 30-second timeout on GraphHopper calls                     |
+| Distance can't converge | Return best attempt with a note             | "Route is Xkm — couldn't exactly match your target of Ykm" |
+| LLM overloaded (529)    | "The AI service is temporarily busy..."     | Anthropic SDK retries up to 5× with exponential backoff    |
+| API rate limit (429)    | "Service is temporarily busy..."            | Log for monitoring                                         |
 
 ---
 

@@ -4,6 +4,8 @@
  * Pure functions — no external dependencies, no side effects.
  */
 
+import type { Coordinate3D } from './types';
+
 const EARTH_RADIUS_KM = 6371;
 
 export interface LatLng {
@@ -58,4 +60,26 @@ export function projectPoint(start: LatLng, bearingDeg: number, distanceKm: numb
     );
 
   return { lat: toDeg(lat2), lng: toDeg(lng2) };
+}
+
+/**
+ * Detect if a route geometry forms a star/spoke pattern.
+ *
+ * A star pattern is detected when the route passes near the start point
+ * in its middle portion (10%–90% of the geometry), indicating spokes
+ * that return to center rather than tracing a loop perimeter.
+ */
+export function isStarShaped(geometry: Coordinate3D[], start: LatLng, radiusKm: number): boolean {
+  if (geometry.length < 5) return false;
+
+  const thresholdKm = radiusKm * 0.25;
+  const trimCount = Math.max(Math.floor(geometry.length * 0.1), 1);
+  const middle = geometry.slice(trimCount, geometry.length - trimCount);
+
+  for (const point of middle) {
+    const dist = haversine(start, { lat: point[0], lng: point[1] });
+    if (dist < thresholdKm) return true;
+  }
+
+  return false;
 }
