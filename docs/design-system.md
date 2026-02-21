@@ -235,6 +235,14 @@ Desktop-first for v0. When mobile is added:
 - Status text: "Generating route…"
 - Map stays visible underneath (don't blank the screen).
 
+### Start Point Badge
+
+- Pill-shaped badge that appears below the prompt input when the user clicks the map to set a start point.
+- Shows coordinates in `lat, lng` format (4 decimal places) with a MapPin icon.
+- Clear button (X) removes the start point.
+- `--radius-full`, `--color-accent-subtle` background, `--color-accent-text` text.
+- Only visible in `idle` and `error` states — hidden once a route is generated.
+
 ### Error Display
 
 - Inline error banner, not a modal. Appears below the prompt input.

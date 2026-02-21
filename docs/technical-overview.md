@@ -233,10 +233,11 @@ No client-side routing. Single page, single flow.
 
 - **PromptInput** — text input + submit button
 - **LoadingState** — shown during route generation
-- **RouteMap** — MapLibre GL map with route polyline and start marker (via react-map-gl)
+- **RouteMap** — MapLibre GL map with route polyline, start marker, and click-to-set-start interaction (via react-map-gl)
 - **ElevationProfile** — Recharts area chart (elevation vs distance)
 - **RouteStats** — distance and elevation gain display
 - **GpxDownload** — triggers browser download via `URL.createObjectURL`
+- **StartPointBadge** — pill showing map-clicked start coordinates with a clear button
 - **ErrorDisplay** — shown on failure
 
 ### Geolocation fallback
