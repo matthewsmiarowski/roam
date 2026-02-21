@@ -84,8 +84,8 @@ When a user submits a prompt, the following happens:
 
 ```
 Browser → POST /api/generate-route
-  1. Claude API (tool use) → structured route params + waypoint bearings
-  2. Nominatim geocoding → lat/lng from location string
+  1. Claude API (tool use) → structured route params + waypoint bearings + start precision
+  2. Resolve start coordinates (explicit coords → GPS → geocoding)
   3. Loop generation: compass bearings + radius → waypoints
   4. GraphHopper Directions API → route geometry + elevation
   5. Distance validation, retry up to 3x if outside ±20%
@@ -104,7 +104,8 @@ Browser → POST /api/generate-route
   "user_location": {
     "latitude": 41.9794,
     "longitude": 2.8214
-  }
+  },
+  "start_coordinates": { "lat": 41.9794, "lng": 2.8214 }
 }
 ```
 
@@ -124,6 +125,7 @@ Browser → POST /api/generate-route
   "metadata": {
     "parsed_params": {
       "start_location": "Central Girona, Spain",
+      "start_precision": "general",
       "target_distance_km": 60,
       "elevation_character": "hilly",
       "road_preference": "quiet_roads"
@@ -154,18 +156,27 @@ This is the hardest problem in the system. Most routing engines only do A-to-B. 
 
 ### How the LLM is used
 
-The LLM does two jobs in a single tool-use call:
+The LLM does three jobs in a single tool-use call:
 
 1. **Parameter extraction** — parse the prompt into structured data (start location, target distance, elevation character, road preference)
 2. **Geographic reasoning** — suggest exactly 3 compass bearings for waypoint placement based on terrain knowledge of the area (e.g., knowing hills are north of Girona, not east toward the coast)
+3. **Start precision classification** — outputs `start_precision: "exact" | "general"` to indicate whether the user wants a precise start point (specific address, landmark, "from here") or a general area (city, region)
 
 The key insight: we ask for **directions** (compass bearings), not coordinates. The LLM can reason about direction from geographic knowledge. It would hallucinate exact coordinates.
 
-The LLM is also instructed to produce simple, geocoder-friendly location strings ("City, Country" format) rather than overly specific names that Nominatim can't resolve. The Anthropic SDK is configured with `maxRetries: 5` to handle transient 529 overloaded errors.
+When `start_precision` is "general", the LLM produces simple, geocoder-friendly location strings ("City, Country" format). When "exact", it preserves the user's specific address or landmark verbatim for accurate geocoding. The Anthropic SDK is configured with `maxRetries: 5` to handle transient 529 overloaded errors.
+
+### Start coordinate resolution
+
+The API route resolves the start point using a three-tier priority:
+
+1. **Explicit coordinates** (`start_coordinates` in request body) — used directly, skips geocoding. Intended for map-click start pickers.
+2. **GPS + self-reference** — when `start_precision` is "exact" and `user_location` GPS is available (user said "from here"), GPS coordinates are used directly.
+3. **Geocoding fallback** — the `start_location` string is geocoded via Nominatim. When precision is "exact", the LLM passes the address verbatim for better accuracy; when "general", it simplifies the name.
 
 ### The algorithm
 
-1. Geocode `start_location` → `(lat, lng)` (with progressive fallback — see Geocoding below)
+1. Resolve start coordinates via the priority above → `(lat, lng)`
 2. Calculate waypoint radius: `radius_km = target_distance_km / (2π × stretch_factor)` where `stretch_factor ≈ 1.3` accounts for roads not being straight lines
 3. Place 3 waypoints: for each bearing in `waypoint_bearings`, project a point at `radius_km` distance from start along that bearing (capped at 3 to stay within GraphHopper free tier's 5-point limit: start + 3 waypoints + start)
 4. Route through waypoints via GraphHopper: `start → wp1 → wp2 → wp3 → start` using the cycling profile

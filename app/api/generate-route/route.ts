@@ -3,7 +3,12 @@ import { extractRouteParams } from '@/lib/llm';
 import { geocode } from '@/lib/geocoding';
 import { generateRoute } from '@/lib/routing';
 import { generateGpx } from '@/lib/gpx';
-import type { GenerateRouteRequest, GenerateRouteResponse, GenerateRouteError } from '@/lib/types';
+import type {
+  GenerateRouteRequest,
+  GenerateRouteResponse,
+  GenerateRouteError,
+  LatLng,
+} from '@/lib/types';
 
 export async function POST(request: NextRequest) {
   let parsedLocation: string | undefined;
@@ -28,9 +33,24 @@ export async function POST(request: NextRequest) {
       waypoint_bearings: params.waypoint_bearings,
     });
 
-    // 2. Geocode the start location
-    const start = await geocode(params.start_location);
-    console.log('Geocoded:', params.start_location, '->', start);
+    // 2. Resolve start coordinates
+    let start: LatLng;
+    if (body.start_coordinates) {
+      // Explicit coordinates from map click — highest priority
+      start = body.start_coordinates;
+      console.log('Using explicit start coordinates:', start);
+    } else if (
+      params.start_precision === 'exact' &&
+      body.user_location
+    ) {
+      // User said "from here" / "from my location" + GPS available
+      start = { lat: body.user_location.latitude, lng: body.user_location.longitude };
+      console.log('Using GPS coordinates (exact + user_location):', start);
+    } else {
+      // Geocode the location string (verbatim address when exact, simplified when general)
+      start = await geocode(params.start_location);
+      console.log('Geocoded:', params.start_location, '->', start);
+    }
 
     // 3. Generate route via GraphHopper
     const route = await generateRoute(params, start);

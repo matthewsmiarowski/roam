@@ -22,6 +22,7 @@ export interface RouteData {
 /** LLM-extracted route parameters from a natural language prompt. */
 export interface RouteParams {
   start_location: string;
+  start_precision: 'exact' | 'general';
   target_distance_km: number;
   elevation_character: 'flat' | 'rolling' | 'hilly' | 'mountainous';
   road_preference: 'any' | 'quiet_roads' | 'bike_paths';
@@ -33,6 +34,7 @@ export interface RouteParams {
 export interface GenerateRouteRequest {
   prompt: string;
   user_location?: { latitude: number; longitude: number };
+  start_coordinates?: { lat: number; lng: number };
 }
 
 /** POST /api/generate-route success response. */

@@ -30,6 +30,7 @@ const mockGpx = vi.mocked(generateGpx);
 
 const sampleParams: RouteParams = {
   start_location: 'Girona, Catalonia, Spain',
+  start_precision: 'general',
   target_distance_km: 60,
   elevation_character: 'hilly',
   road_preference: 'quiet_roads',
@@ -95,7 +96,8 @@ describe('POST /api/generate-route', () => {
 
     expect(res.status).toBe(500);
     const data = await res.json();
-    expect(data.message).toContain("couldn't find that location");
+    expect(data.message).toContain("couldn't find");
+    expect(data.message).toContain('Girona, Catalonia, Spain');
   });
 
   it('returns user-friendly error when LLM fails', async () => {
@@ -130,5 +132,58 @@ describe('POST /api/generate-route', () => {
     await POST(makeRequest({ prompt: 'ride from here', user_location: userLocation }) as never);
 
     expect(mockExtract).toHaveBeenCalledWith('ride from here', userLocation);
+  });
+
+  it('uses explicit start_coordinates and skips geocoding', async () => {
+    mockExtract.mockResolvedValue(sampleParams);
+    mockGenerate.mockResolvedValue(sampleRoute);
+    mockGpx.mockReturnValue('<gpx/>');
+
+    const startCoords = { lat: 42.123, lng: 2.456 };
+    await POST(
+      makeRequest({ prompt: 'ride from here', start_coordinates: startCoords }) as never
+    );
+
+    expect(mockGeocode).not.toHaveBeenCalled();
+    expect(mockGenerate).toHaveBeenCalledWith(sampleParams, startCoords);
+  });
+
+  it('uses GPS coordinates when precision is exact and user_location available', async () => {
+    const exactParams = { ...sampleParams, start_precision: 'exact' as const };
+    mockExtract.mockResolvedValue(exactParams);
+    mockGenerate.mockResolvedValue(sampleRoute);
+    mockGpx.mockReturnValue('<gpx/>');
+
+    const userLocation = { latitude: 41.9, longitude: 2.8 };
+    await POST(
+      makeRequest({ prompt: 'ride from here', user_location: userLocation }) as never
+    );
+
+    expect(mockGeocode).not.toHaveBeenCalled();
+    expect(mockGenerate).toHaveBeenCalledWith(exactParams, { lat: 41.9, lng: 2.8 });
+  });
+
+  it('falls back to geocoding when precision is exact but no user_location', async () => {
+    const exactParams = { ...sampleParams, start_precision: 'exact' as const };
+    mockExtract.mockResolvedValue(exactParams);
+    mockGeocode.mockResolvedValue({ lat: 41.9794, lng: 2.8214 });
+    mockGenerate.mockResolvedValue(sampleRoute);
+    mockGpx.mockReturnValue('<gpx/>');
+
+    await POST(makeRequest({ prompt: 'ride from 123 Main St, Girona' }) as never);
+
+    expect(mockGeocode).toHaveBeenCalledWith('Girona, Catalonia, Spain');
+    expect(mockGenerate).toHaveBeenCalledWith(exactParams, { lat: 41.9794, lng: 2.8214 });
+  });
+
+  it('geocodes normally when precision is general', async () => {
+    mockExtract.mockResolvedValue(sampleParams);
+    mockGeocode.mockResolvedValue({ lat: 41.9794, lng: 2.8214 });
+    mockGenerate.mockResolvedValue(sampleRoute);
+    mockGpx.mockReturnValue('<gpx/>');
+
+    await POST(makeRequest({ prompt: '60km ride around Girona' }) as never);
+
+    expect(mockGeocode).toHaveBeenCalledWith('Girona, Catalonia, Spain');
   });
 });

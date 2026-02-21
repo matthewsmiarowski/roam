@@ -23,6 +23,7 @@ const validToolUseResponse = {
       name: 'generate_route_parameters',
       input: {
         start_location: 'Girona, Spain',
+        start_precision: 'general',
         target_distance_km: 60,
         elevation_character: 'hilly',
         road_preference: 'quiet_roads',

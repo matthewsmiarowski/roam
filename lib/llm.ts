@@ -20,10 +20,11 @@ Key instructions for waypoint_bearings:
 - Spread the 3 bearings roughly 120° apart around the compass to form a coherent triangular loop. They should not be clustered in one direction.
 - Order bearings clockwise so the loop flows naturally.
 
-Key instructions for start_location:
-- Use a simple, well-known place name that a geocoder can resolve: "City, Country" or "Landmark, City, Country".
-- Do NOT include neighborhood names, districts, or overly specific qualifiers. For example, use "Girona, Spain" not "Girona Historic District, Girona, Catalonia, Spain".
-- If the user mentions a specific landmark (e.g. "Richmond Park"), use that landmark name plus the city: "Richmond Park, London, UK".
+Key instructions for start_location and start_precision:
+- Set start_precision to "exact" when the user provides a specific address, a precise landmark, or references their current location (e.g. "from here", "from my location", "from home").
+- Set start_precision to "general" when the user names a city, region, or general area (e.g. "around Girona", "in Portland").
+- When start_precision is "exact": preserve the user's location text as-is for accurate geocoding. Include the full address or specific landmark name. For example, "123 Oak Street, Portland, Oregon" or "Richmond Park, London, UK".
+- When start_precision is "general": use a simple, well-known place name that a geocoder can resolve: "City, Country" or "Landmark, City, Country". Do NOT include neighborhood names, districts, or overly specific qualifiers.
 
 When parameters are missing from the prompt:
 - Default distance: 40km
@@ -39,7 +40,13 @@ const ROUTE_TOOL: Anthropic.Messages.Tool = {
       start_location: {
         type: 'string',
         description:
-          'The starting location for geocoding. Use a simple format: "City, Country" or "Landmark, City, Country". Avoid neighborhood names, districts, or overly specific qualifiers.',
+          'The starting location for geocoding. When start_precision is "exact", preserve the user\'s specific address or landmark verbatim. When "general", use a simple format: "City, Country" or "Landmark, City, Country".',
+      },
+      start_precision: {
+        type: 'string',
+        enum: ['exact', 'general'],
+        description:
+          'Set to "exact" when the user provides a specific address, precise landmark, or references their current location. Set to "general" when the user names a city, region, or general area.',
       },
       target_distance_km: {
         type: 'number',
@@ -73,6 +80,7 @@ const ROUTE_TOOL: Anthropic.Messages.Tool = {
     },
     required: [
       'start_location',
+      'start_precision',
       'target_distance_km',
       'elevation_character',
       'road_preference',
