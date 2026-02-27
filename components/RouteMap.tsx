@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useCallback } from 'react';
 import Map, { Source, Layer, Marker } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { MapRef } from 'react-map-gl/maplibre';
-import type { RouteOption, LatLng } from '@/lib/types';
+import type { MapRef, MapLayerMouseEvent } from 'react-map-gl/maplibre';
+import type { RouteOption, LatLng, Coordinate3D } from '@/lib/types';
+import { findNearestPointIndex } from '@/lib/geo';
 
 interface RouteMapProps {
   /** Multiple route options displayed simultaneously */
@@ -16,6 +17,12 @@ interface RouteMapProps {
   startPoint?: LatLng | null;
   onMapClick?: (lngLat: { lng: number; lat: number }) => void;
   interactive?: boolean;
+  /** Full geometry of the selected route (for hover point lookup) */
+  selectedGeometry?: Coordinate3D[] | null;
+  /** Index into the geometry array currently being hovered */
+  hoveredPointIndex?: number | null;
+  /** Callback when the user hovers along the route line */
+  onHoverPoint?: (index: number | null) => void;
 }
 
 function routeToGeoJSON(geometry: [number, number, number][]) {
@@ -56,6 +63,9 @@ export function RouteMap({
   startPoint,
   onMapClick,
   interactive,
+  selectedGeometry,
+  hoveredPointIndex,
+  onHoverPoint,
 }: RouteMapProps) {
   const mapRef = useRef<MapRef>(null);
 
@@ -92,6 +102,53 @@ export function RouteMap({
   const showSingleSelected =
     selectedRouteIndex !== null && selectedRouteIndex !== undefined && routes;
 
+  // Hover-on-route detection
+  const handleMouseMove = useCallback(
+    (e: MapLayerMouseEvent) => {
+      if (!selectedGeometry || !onHoverPoint || !mapRef.current) return;
+      if (selectedRouteIndex === null || selectedRouteIndex === undefined) return;
+
+      const point = e.point;
+      const bbox: [[number, number], [number, number]] = [
+        [point.x - 10, point.y - 10],
+        [point.x + 10, point.y + 10],
+      ];
+      const features = mapRef.current.queryRenderedFeatures(bbox, {
+        layers: [`route-line-${selectedRouteIndex}`],
+      });
+
+      const canvas = mapRef.current.getCanvas();
+      if (features.length > 0) {
+        canvas.style.cursor = 'pointer';
+        const index = findNearestPointIndex(
+          { lat: e.lngLat.lat, lng: e.lngLat.lng },
+          selectedGeometry
+        );
+        onHoverPoint(index);
+      } else {
+        canvas.style.cursor = interactive ? 'crosshair' : '';
+        onHoverPoint(null);
+      }
+    },
+    [selectedGeometry, onHoverPoint, selectedRouteIndex, interactive]
+  );
+
+  const handleMouseLeave = useCallback(() => {
+    onHoverPoint?.(null);
+    if (mapRef.current) {
+      mapRef.current.getCanvas().style.cursor = interactive ? 'crosshair' : '';
+    }
+  }, [onHoverPoint, interactive]);
+
+  // Hover marker position
+  const hoverMarkerCoord =
+    hoveredPointIndex !== null &&
+    hoveredPointIndex !== undefined &&
+    selectedGeometry &&
+    selectedGeometry[hoveredPointIndex]
+      ? selectedGeometry[hoveredPointIndex]
+      : null;
+
   return (
     <Map
       ref={mapRef}
@@ -103,6 +160,8 @@ export function RouteMap({
       style={{ width: '100%', height: '100%' }}
       cursor={interactive ? 'crosshair' : undefined}
       onClick={(e) => onMapClick?.({ lng: e.lngLat.lng, lat: e.lngLat.lat })}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
       mapStyle={`https://api.maptiler.com/maps/streets-v2/style.json?key=${process.env.NEXT_PUBLIC_MAPTILER_API_KEY}`}
     >
       {/* Multi-route: render each route option */}
@@ -172,6 +231,23 @@ export function RouteMap({
               }}
             />
           </div>
+        </Marker>
+      )}
+
+      {/* Hover point marker (synced with elevation profile) */}
+      {hoverMarkerCoord && (
+        <Marker
+          longitude={hoverMarkerCoord[1]}
+          latitude={hoverMarkerCoord[0]}
+          anchor="center"
+        >
+          <div
+            className="h-3 w-3 rounded-full border-2 border-white"
+            style={{
+              backgroundColor: 'var(--color-accent)',
+              boxShadow: '0 0 6px rgba(0,0,0,0.3)',
+            }}
+          />
         </Marker>
       )}
     </Map>

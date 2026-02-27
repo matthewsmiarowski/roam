@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { ChatPanel } from '@/components/ChatPanel';
 import { ElevationProfile } from '@/components/ElevationProfile';
@@ -14,6 +14,11 @@ const RouteMap = dynamic(
 export default function Home() {
   const { state, sendMessage, selectRoute, backToOptions, setStartPoint, reset } = useChat();
   const [hoveredRouteIndex, setHoveredRouteIndex] = useState<number | null>(null);
+  const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
+
+  const handleHoverPoint = useCallback((index: number | null) => {
+    setHoveredPointIndex(index);
+  }, []);
 
   const handleMapClick = useCallback(
     (lngLat: { lng: number; lat: number }) => {
@@ -32,6 +37,11 @@ export default function Home() {
     selectedIndex !== null && state.routeOptions ? state.routeOptions[selectedIndex] : null;
 
   const isMapInteractive = state.phase === 'chatting';
+
+  // Clear point hover when selected route changes
+  useEffect(() => {
+    setHoveredPointIndex(null);
+  }, [selectedIndex]);
 
   return (
     <main className="relative flex h-screen w-screen overflow-hidden">
@@ -58,13 +68,20 @@ export default function Home() {
             startPoint={state.startPoint}
             onMapClick={handleMapClick}
             interactive={isMapInteractive}
+            selectedGeometry={selectedRoute?.route.geometry ?? null}
+            hoveredPointIndex={hoveredPointIndex}
+            onHoverPoint={handleHoverPoint}
           />
         </div>
 
         {/* Elevation profile — docked to bottom when a route is selected */}
         {selectedRoute && (
           <div className="absolute inset-x-0 bottom-0 z-10">
-            <ElevationProfile geometry={selectedRoute.route.geometry} />
+            <ElevationProfile
+              geometry={selectedRoute.route.geometry}
+              hoveredPointIndex={hoveredPointIndex}
+              onHoverPoint={handleHoverPoint}
+            />
           </div>
         )}
       </div>

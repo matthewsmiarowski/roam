@@ -83,3 +83,26 @@ export function isStarShaped(geometry: Coordinate3D[], start: LatLng, radiusKm: 
 
   return false;
 }
+
+/**
+ * Finds the index of the nearest point in a geometry array to a given location.
+ *
+ * Uses squared Euclidean distance on lat/lng for speed — accurate enough
+ * for nearest-point search at route scale (no trig needed).
+ * Returns -1 if geometry is empty.
+ */
+export function findNearestPointIndex(target: LatLng, geometry: Coordinate3D[]): number {
+  if (geometry.length === 0) return -1;
+  let bestIndex = 0;
+  let bestDistSq = Infinity;
+  for (let i = 0; i < geometry.length; i++) {
+    const dLat = geometry[i][0] - target.lat;
+    const dLng = geometry[i][1] - target.lng;
+    const distSq = dLat * dLat + dLng * dLng;
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}

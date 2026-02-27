@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { haversine, projectPoint, isStarShaped, type LatLng } from './geo';
+import { haversine, projectPoint, isStarShaped, findNearestPointIndex, type LatLng } from './geo';
 import type { Coordinate3D } from './types';
 
 // Known reference points
@@ -130,5 +130,52 @@ describe('isStarShaped', () => {
       [start.lat, start.lng, 100],
     ];
     expect(isStarShaped(geometry, start, radiusKm)).toBe(false);
+  });
+});
+
+describe('findNearestPointIndex', () => {
+  it('returns -1 for empty geometry', () => {
+    expect(findNearestPointIndex(girona, [])).toBe(-1);
+  });
+
+  it('returns 0 for a single-point geometry', () => {
+    const geometry: Coordinate3D[] = [[girona.lat, girona.lng, 100]];
+    expect(findNearestPointIndex(barcelona, geometry)).toBe(0);
+  });
+
+  it('finds the nearest point at the start', () => {
+    const geometry: Coordinate3D[] = [
+      [girona.lat, girona.lng, 100],
+      [barcelona.lat, barcelona.lng, 50],
+      [london.lat, london.lng, 10],
+    ];
+    expect(findNearestPointIndex(girona, geometry)).toBe(0);
+  });
+
+  it('finds the nearest point in the middle', () => {
+    const geometry: Coordinate3D[] = [
+      [london.lat, london.lng, 10],
+      [girona.lat, girona.lng, 100],
+      [tokyo.lat, tokyo.lng, 30],
+    ];
+    expect(findNearestPointIndex(barcelona, geometry)).toBe(1); // Girona is closest to Barcelona
+  });
+
+  it('finds the nearest point at the end', () => {
+    const geometry: Coordinate3D[] = [
+      [london.lat, london.lng, 10],
+      [girona.lat, girona.lng, 100],
+      [barcelona.lat, barcelona.lng, 50],
+    ];
+    expect(findNearestPointIndex(barcelona, geometry)).toBe(2);
+  });
+
+  it('returns exact match index when target is on a geometry point', () => {
+    const geometry: Coordinate3D[] = [
+      [girona.lat, girona.lng, 100],
+      [barcelona.lat, barcelona.lng, 50],
+      [london.lat, london.lng, 10],
+    ];
+    expect(findNearestPointIndex(barcelona, geometry)).toBe(1);
   });
 });
