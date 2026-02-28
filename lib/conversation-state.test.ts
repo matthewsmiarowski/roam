@@ -189,6 +189,7 @@ describe('conversationReducer', () => {
       selectedRouteIndex: 0,
       userLocation: { latitude: 41.9, longitude: 2.8 },
       startPoint: { lat: 42.0, lng: 2.9 },
+      editing: null,
     };
     const state = conversationReducer(complex, { type: 'RESET' });
 

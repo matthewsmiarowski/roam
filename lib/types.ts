@@ -9,6 +9,23 @@ export type { LatLng } from './geo';
 /** 3D coordinate: [latitude, longitude, elevation in meters]. */
 export type Coordinate3D = [number, number, number];
 
+/** A single routed segment between two consecutive waypoints. */
+export interface RouteSegment {
+  from: { lat: number; lng: number };
+  to: { lat: number; lng: number };
+  geometry: Coordinate3D[];
+  distance_km: number;
+  elevation_gain_m: number;
+}
+
+/** An editable waypoint on a route. */
+export interface RouteWaypoint {
+  id: string;
+  lat: number;
+  lng: number;
+  type: 'start' | 'via' | 'end';
+}
+
 /** Route data returned to the frontend. */
 export interface RouteData {
   geometry: Coordinate3D[];
@@ -17,6 +34,10 @@ export interface RouteData {
   elevation_gain_m: number;
   elevation_gain_ft: number;
   start_point: { lat: number; lng: number };
+  /** Segment data for editing (present on v2 stitched routes). */
+  segments?: RouteSegment[];
+  /** Editable waypoints (present on v2 stitched routes). */
+  waypoints?: RouteWaypoint[];
 }
 
 /** LLM-extracted route parameters from a natural language prompt. */
@@ -88,7 +109,19 @@ export interface GenerateRoutesParams {
   reasoning: string;
 }
 
-/** Frontend conversation state (v1). */
+/** Editing state for v2 waypoint editing. */
+export interface EditingState {
+  waypoints: RouteWaypoint[];
+  segments: RouteSegment[];
+  /** Pre-computed stitched geometry (concatenation of all segments). */
+  geometry: Coordinate3D[];
+  isRerouting: boolean;
+  selectedWaypointIndex: number | null;
+  /** Error message from the last rerouting attempt, if it failed. */
+  error: string | null;
+}
+
+/** Frontend conversation state. */
 export interface ConversationState {
   phase: 'chatting' | 'generating' | 'options' | 'detail';
   messages: Message[];
@@ -97,6 +130,8 @@ export interface ConversationState {
   selectedRouteIndex: number | null;
   userLocation: { latitude: number; longitude: number } | null;
   startPoint: { lat: number; lng: number } | null;
+  /** Non-null when in detail phase with an editable route. */
+  editing: EditingState | null;
 }
 
 /** Reducer actions for conversation state. */
@@ -111,4 +146,17 @@ export type ConversationAction =
   | { type: 'SET_ERROR'; message: string }
   | { type: 'SET_USER_LOCATION'; location: { latitude: number; longitude: number } }
   | { type: 'SET_START_POINT'; point: { lat: number; lng: number } | null }
-  | { type: 'RESET' };
+  | { type: 'RESET' }
+  // v2 editing actions
+  | { type: 'UPDATE_WAYPOINT'; waypointIndex: number; lat: number; lng: number }
+  | { type: 'ADD_WAYPOINT'; afterSegmentIndex: number; lat: number; lng: number }
+  | { type: 'REMOVE_WAYPOINT'; waypointIndex: number }
+  | { type: 'SELECT_WAYPOINT'; index: number | null }
+  | { type: 'START_REROUTING' }
+  | {
+      type: 'FINISH_REROUTING';
+      segments: RouteSegment[];
+      waypoints: RouteWaypoint[];
+      geometry: Coordinate3D[];
+    }
+  | { type: 'REROUTING_ERROR'; message: string };

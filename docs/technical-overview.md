@@ -27,6 +27,7 @@ Roam is a single Next.js application (App Router, TypeScript) that serves both t
 │  API Routes                                             │
 │  ┌─────────────────────────────────────────────────┐    │
 │  │  POST /api/chat (SSE streaming)                  │    │
+│  │  POST /api/route/segment (segment re-routing)    │    │
 │  └──────────────────────┬──────────────────────────┘    │
 │                         │                               │
 └─────────────────────────┼───────────────────────────────┘
@@ -57,25 +58,29 @@ roam/
 │   ├── layout.tsx               # Root layout
 │   ├── globals.css              # Tailwind + design system tokens (CSS custom properties)
 │   └── api/
-│       └── chat/
-│           └── route.ts         # POST handler — SSE streaming chat endpoint
+│       ├── chat/
+│       │   └── route.ts         # POST handler — SSE streaming chat endpoint
+│       └── route/
+│           └── segment/
+│               └── route.ts     # POST handler — single-segment re-routing for editing
 ├── components/                  # React components (chat UI, map, route cards, etc.)
 ├── lib/                         # Pure TypeScript modules (no framework dependency)
 │   ├── llm.ts                   # Claude API — conversational streaming with tool_choice: auto
 │   ├── conversation.ts          # Orchestrator — ties LLM, geocoding, and parallel route generation
 │   ├── conversation-state.ts    # Reducer + actions for conversation state (pure logic)
 │   ├── use-chat.ts              # Custom React hook — SSE connection + state dispatch
-│   ├── routing.ts               # GraphHopper integration + loop generation
+│   ├── routing.ts               # GraphHopper integration + loop generation + segment stitching
 │   ├── geocoding.ts             # Nominatim geocoding
 │   ├── gpx.ts                   # GPX XML generation
 │   ├── geo.ts                   # Haversine, point projection, etc.
 │   └── types.ts                 # Shared types (messages, route options, state, actions)
 ├── docs/                        # Project documentation
+├── v2-plan/                     # v2 (interactive editing) PRD
 ├── project-overview/            # Product planning docs (PRD, tech plan)
 └── public/                      # Static assets
 ```
 
-All backend logic lives in `lib/` as pure TypeScript modules with no framework dependency (except `use-chat.ts` which is a React hook). The API route in `app/api/chat/route.ts` is a thin orchestrator that calls into these modules. This keeps the logic testable and portable.
+All backend logic lives in `lib/` as pure TypeScript modules with no framework dependency (except `use-chat.ts` which is a React hook). The API routes in `app/api/` are thin orchestrators that call into these modules. This keeps the logic testable and portable.
 
 ---
 
@@ -91,8 +96,14 @@ Browser → POST /api/chat (SSE streaming)
   3. If tool call (generate_routes):
      a. Resolve start coordinates (explicit coords → GPS → geocoding)
      b. Geocode named waypoints across all 3 variants
-     c. Generate 3 routes in parallel (single GraphHopper call each)
+     c. Generate 3 routes in parallel (segment-based stitching, ~4 GraphHopper calls each)
      d. Stream route options back to client
+
+Browser → POST /api/route/segment (JSON)
+  For editing operations (drag/add/remove waypoint):
+  1. Client sends from/to coordinates for one segment
+  2. Server routes via GraphHopper and returns geometry + stats
+  3. Client stitches updated segments locally and dispatches state update
 ```
 
 ### API Contract
@@ -137,6 +148,35 @@ data: {}
 
 Error events: `event: error` with `{"message": "..."}`.
 Non-streaming errors return `{ status: "error", message: string }` with HTTP 400.
+
+### Segment Re-routing Endpoint
+
+**Endpoint:** `POST /api/route/segment`
+
+Used by the client during visual editing to re-route individual segments. No LLM involvement — direct pass-through to GraphHopper.
+
+**Request:**
+
+```json
+{
+  "from": { "lat": 41.98, "lng": 2.82 },
+  "to": { "lat": 42.01, "lng": 2.85 }
+}
+```
+
+**Response:**
+
+```json
+{
+  "geometry": [[41.98, 2.82, 150], ...],
+  "distance_km": 4.2,
+  "distance_mi": 2.6,
+  "elevation_gain_m": 85,
+  "elevation_gain_ft": 279
+}
+```
+
+Error responses: 400 for invalid input, 500 for GraphHopper failures.
 
 ---
 
@@ -186,15 +226,45 @@ For each of the 3 route variants (generated in parallel):
 
 1. Resolve start coordinates via the priority above → `(lat, lng)` (shared across all variants)
 2. Geocode named waypoints (if any) across all variants — deduplicated to avoid redundant geocoding calls
-3. Merge named and bearing-based waypoints: named waypoints take priority, remaining slots filled by bearing waypoints (capped at 3 total to stay within GraphHopper free tier's 5-point limit: start + 3 waypoints + start)
+3. Merge named and bearing-based waypoints: named waypoints take priority, remaining slots filled by bearing waypoints (capped at 3 total)
 4. Calculate waypoint radius: `radius_km = target_distance_km / (2π × stretch_factor)` where `stretch_factor ≈ 1.3` accounts for roads not being straight lines
 5. Place bearing-based waypoints: project points at `radius_km` distance from start along each bearing
-6. Route through waypoints via GraphHopper: `start → wp1 → wp2 → wp3 → start` using the cycling profile
-7. Return the route geometry, elevation data, and stats
+6. Route via **segment-based stitching**: each consecutive waypoint pair gets an independent GraphHopper call (`start → wp1`, `wp1 → wp2`, `wp2 → wp3`, `wp3 → start`), all run in parallel. This produces N+1 independent `RouteSegment` objects for N intermediate waypoints.
+7. Stitch segments: concatenate geometries (deduplicating boundary points), sum distances and elevation gains
+8. Return the stitched geometry, elevation data, stats, **and the individual segments and waypoints** for editing
 
-Each variant gets a single GraphHopper call (no retry loop in comparison mode). Failed variants are excluded — at least 1 successful route is required or an error is thrown. This conserves the GraphHopper free tier budget (~160 conversations/day at 3 calls each).
+Each variant gets ~4 GraphHopper calls (one per segment). Failed variants are excluded — at least 1 successful route is required or an error is thrown. Budget: ~40 conversations/day on the GraphHopper free tier (12 calls per generation × 500/day limit).
 
 The full retry loop (distance validation, up to 3 iterations) is still available via the `generateRoute` function for future single-route use cases.
+
+### Multi-leg stitching architecture
+
+Routes are stored as independent segments rather than a single monolithic geometry. This enables **localized editing**: when a user drags one waypoint, only the 1-2 adjacent segments re-route. All other segments stay byte-identical.
+
+```
+Route structure:
+  waypoints: [start, wp1, wp2, wp3, start]
+  segments:  [seg0,  seg1, seg2, seg3]
+             start→wp1, wp1→wp2, wp2→wp3, wp3→start
+```
+
+Key functions in `lib/routing.ts`:
+- **`callGraphHopperSegment(from, to)`** — point-to-point routing between 2 points (no loop closure)
+- **`routeViaSegments(waypoints)`** — parallel segment routing for an ordered waypoint list
+- **`stitchSegments(segments)`** — concatenates segment geometries, sums stats, deduplicates boundary points
+
+### Visual editing (v2)
+
+After selecting a route, users can visually edit it by manipulating waypoints on the map:
+
+- **Drag a waypoint** — re-routes only the 2 adjacent segments (2 API calls)
+- **Click the route line** — inserts a new waypoint, splitting one segment into two (2 API calls)
+- **Click the map** — appends a waypoint before the return-to-start segment (2 API calls)
+- **Delete a waypoint** — merges two adjacent segments into one (1 API call)
+
+Each edit calls `POST /api/route/segment` for the affected segments in parallel. The client splices results into the segment array, recomputes the stitched geometry, and updates stats. Unaffected segments are completely untouched.
+
+Constraints: maximum 8 intermediate waypoints, minimum 1 (prevents degenerate out-and-back). Start/end point is not draggable — changing the start requires generating a new route through conversation.
 
 ### Geocoding
 
@@ -236,6 +306,15 @@ interface ConversationState {
   selectedRouteIndex: number | null;
   userLocation: { latitude: number; longitude: number } | null;
   startPoint: { lat: number; lng: number } | null;
+  editing: EditingState | null;  // non-null when in detail phase with editable route
+}
+
+interface EditingState {
+  waypoints: RouteWaypoint[];
+  segments: RouteSegment[];
+  geometry: Coordinate3D[];      // pre-computed stitched geometry
+  isRerouting: boolean;
+  selectedWaypointIndex: number | null;
 }
 ```
 
@@ -245,13 +324,16 @@ Phase transitions:
 chatting → [send message] → generating
 generating → [AI asks question] → chatting
 generating → [routes ready] → options
-options → [select route] → detail
+options → [select route] → detail (+ populate editing state from route segments)
 options → [send message] → generating
-detail → [back] → options
-detail → [send message] → generating
+detail → [drag/add/remove waypoint] → rerouting → detail (editing state updated)
+detail → [back] → options (editing cleared)
+detail → [send message] → generating (editing cleared)
 ```
 
-The reducer (`lib/conversation-state.ts`) is pure logic with no React dependency — fully testable. The custom hook (`lib/use-chat.ts`) manages the SSE connection and dispatches actions.
+The reducer (`lib/conversation-state.ts`) is pure logic with no React dependency — fully testable. The custom hook (`lib/use-chat.ts`) manages the SSE connection, dispatches actions, and handles the async re-routing workflow for editing (API calls, segment splicing, error recovery).
+
+Editing actions in the reducer: `UPDATE_WAYPOINT`, `ADD_WAYPOINT`, `REMOVE_WAYPOINT`, `SELECT_WAYPOINT`, `START_REROUTING`, `FINISH_REROUTING`, `REROUTING_ERROR`. The `FINISH_REROUTING` action also updates the selected `RouteOption` in `routeOptions` with new geometry, stats, and regenerated GPX — so going back to options preserves edits.
 
 No client-side routing. Single page, single flow.
 
@@ -263,9 +345,10 @@ No client-side routing. Single page, single flow.
 - **TypingIndicator** — three-dot pulse animation shown while waiting for AI response
 - **RouteCardGroup** — container for 3 route option cards within a chat message
 - **RouteCard** — compact card: color swatch, name, distance, elevation, time estimate, difficulty badge. Hover highlights route on map.
-- **RouteDetail** — full stats, GPX download, "back to options" link. Shown inline in chat when a route is selected.
-- **RouteMap** — MapLibre GL map supporting multi-route rendering with distinct colors and hover-highlight. Also handles map-click start point.
-- **ElevationProfile** — Recharts area chart (elevation vs distance). Docked to bottom of map area when a route is selected.
+- **RouteDetail** — full stats, GPX download, "back to options" link. Shown inline in chat when a route is selected. In editing mode, shows editing controls: helper text, rerouting indicator, and delete waypoint button.
+- **RouteMap** — MapLibre GL map supporting multi-route rendering with distinct colors and hover-highlight. In editing mode, renders per-segment route lines and draggable `WaypointMarker` components. Handles click-on-route-line to add waypoints via `queryRenderedFeatures` on segment layers.
+- **WaypointMarker** — draggable marker for route waypoints. Start markers are green and non-draggable; via markers are numbered, colored to match the route, and draggable. Click to select, click again to deselect. Selected markers show a ring highlight.
+- **ElevationProfile** — Recharts area chart (elevation vs distance). Docked to bottom of map area when a route is selected. Uses editing geometry when edits are active.
 - **RouteStats** — distance and elevation gain display (used inside RouteDetail)
 - **GpxDownload** — triggers browser download via `URL.createObjectURL`. Supports custom filename per route.
 
@@ -307,6 +390,7 @@ GPX XML is returned inline with each route option. The frontend creates a Blob a
 | Distance can't converge | Return best attempt with a note             | "Route is Xkm — couldn't exactly match your target of Ykm" |
 | LLM overloaded (529)    | "The AI service is temporarily busy..."     | Anthropic SDK retries up to 5× with exponential backoff    |
 | API rate limit (429)    | "Service is temporarily busy..."            | Log for monitoring                                         |
+| Segment re-route fails  | Route preserved at previous state            | Waypoint reverts (drag) or edit discarded (add/remove)     |
 
 ---
 
@@ -318,6 +402,6 @@ GPX XML is returned inline with each route option. The frontend creates a Blob a
 - No user accounts or authentication
 - Loop quality is heuristic — can feel geometric rather than organic
 - Elevation targeting is indirect — relies on LLM geographic knowledge
-- GraphHopper free tier: 500 routes/day (~160 conversations at 3 routes each)
+- GraphHopper free tier: 500 req/day (~40 conversations at ~12 calls each due to segment-based stitching, plus ~2 calls per visual edit)
 - Vercel Hobby plan: 10-second function timeout (may need Pro for deployment)
 - Desktop-only layout — chat panel is fixed 400px, no responsive breakpoints yet

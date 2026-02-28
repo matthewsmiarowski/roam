@@ -11,7 +11,14 @@
 import { useReducer, useCallback, useRef, useEffect } from 'react';
 import { conversationReducer, initialState } from './conversation-state';
 import { summarizeRouteOptions } from './conversation';
-import type { ConversationState, ConversationAction, RouteOption } from './types';
+import { stitchSegments } from './routing';
+import type {
+  ConversationState,
+  ConversationAction,
+  RouteOption,
+  RouteSegment,
+  RouteWaypoint,
+} from './types';
 
 interface UseChatReturn {
   state: ConversationState;
@@ -20,11 +27,51 @@ interface UseChatReturn {
   backToOptions: () => void;
   setStartPoint: (point: { lat: number; lng: number } | null) => void;
   reset: () => void;
+  moveWaypoint: (waypointIndex: number, lat: number, lng: number) => void;
+  addWaypoint: (afterSegmentIndex: number, lat: number, lng: number) => void;
+  removeWaypoint: (waypointIndex: number) => void;
+  selectWaypoint: (index: number | null) => void;
+}
+
+/** Call the segment re-routing API for a single leg. */
+async function fetchSegment(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  signal: AbortSignal
+): Promise<RouteSegment> {
+  const res = await fetch('/api/route/segment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: { lat: from.lat, lng: from.lng },
+      to: { lat: to.lat, lng: to.lng },
+    }),
+    signal,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'Routing failed' }));
+    throw new Error(data.error || 'Routing failed');
+  }
+  const data = await res.json();
+  return {
+    from: { lat: from.lat, lng: from.lng },
+    to: { lat: to.lat, lng: to.lng },
+    geometry: data.geometry,
+    distance_km: data.distance_km,
+    elevation_gain_m: data.elevation_gain_m,
+  };
 }
 
 export function useChat(): UseChatReturn {
   const [state, dispatch] = useReducer(conversationReducer, initialState);
   const abortRef = useRef<AbortController | null>(null);
+  const rerouteAbortRef = useRef<AbortController | null>(null);
+
+  // Ref to access latest editing state from async callbacks without stale closures
+  const editingRef = useRef(state.editing);
+  useEffect(() => {
+    editingRef.current = state.editing;
+  }, [state.editing]);
 
   // Request browser geolocation once on mount
   useEffect(() => {
@@ -160,7 +207,210 @@ export function useChat(): UseChatReturn {
     dispatch({ type: 'RESET' });
   }, []);
 
-  return { state, sendMessage, selectRoute, backToOptions, setStartPoint, reset };
+  // --- v2 editing methods ---
+
+  const selectWaypoint = useCallback((index: number | null) => {
+    dispatch({ type: 'SELECT_WAYPOINT', index });
+  }, []);
+
+  const moveWaypoint = useCallback(
+    async (waypointIndex: number, lat: number, lng: number) => {
+      const editing = editingRef.current;
+      if (!editing) return;
+
+      // Guard: waypoint index must be valid
+      const oldWp = editing.waypoints[waypointIndex];
+      if (!oldWp) return;
+
+      rerouteAbortRef.current?.abort();
+      const abort = new AbortController();
+      rerouteAbortRef.current = abort;
+
+      // Optimistic position update so the marker stays at the dragged position
+      dispatch({ type: 'UPDATE_WAYPOINT', waypointIndex, lat, lng });
+      dispatch({ type: 'START_REROUTING' });
+
+      // Compute new waypoints
+      const newWaypoints = editing.waypoints.map((wp, i) =>
+        i === waypointIndex ? { ...wp, lat, lng } : wp
+      );
+
+      try {
+        // Route the 1-2 affected segments in parallel
+        const promises: Promise<{ index: number; segment: RouteSegment }>[] = [];
+
+        if (waypointIndex > 0) {
+          const segIdx = waypointIndex - 1;
+          promises.push(
+            fetchSegment(newWaypoints[segIdx], newWaypoints[segIdx + 1], abort.signal).then(
+              (segment) => ({ index: segIdx, segment })
+            )
+          );
+        }
+        if (waypointIndex < newWaypoints.length - 1) {
+          const segIdx = waypointIndex;
+          promises.push(
+            fetchSegment(newWaypoints[segIdx], newWaypoints[segIdx + 1], abort.signal).then(
+              (segment) => ({ index: segIdx, segment })
+            )
+          );
+        }
+
+        const results = await Promise.all(promises);
+
+        // Splice new segments into the array (untouched segments stay identical)
+        const newSegments = [...editing.segments];
+        for (const { index, segment } of results) {
+          newSegments[index] = segment;
+        }
+
+        const stitched = stitchSegments(newSegments);
+        dispatch({
+          type: 'FINISH_REROUTING',
+          segments: newSegments,
+          waypoints: newWaypoints,
+          geometry: stitched.geometry,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        dispatch({
+          type: 'REROUTING_ERROR',
+          message: error instanceof Error ? error.message : 'Routing failed',
+        });
+        // Revert waypoint to pre-drag position
+        dispatch({ type: 'UPDATE_WAYPOINT', waypointIndex, lat: oldWp.lat, lng: oldWp.lng });
+      }
+    },
+    []
+  );
+
+  const addWaypoint = useCallback(
+    async (afterSegmentIndex: number, lat: number, lng: number) => {
+      const editing = editingRef.current;
+      if (!editing) return;
+
+      // Enforce max 8 via waypoints
+      const viaCount = editing.waypoints.filter((w) => w.type === 'via').length;
+      if (viaCount >= 8) return;
+
+      rerouteAbortRef.current?.abort();
+      const abort = new AbortController();
+      rerouteAbortRef.current = abort;
+
+      dispatch({ type: 'START_REROUTING' });
+
+      // Compute new waypoints with the inserted point
+      const insertAt = afterSegmentIndex + 1;
+      const newWp: RouteWaypoint = {
+        id: crypto.randomUUID(),
+        lat,
+        lng,
+        type: 'via',
+      };
+      const newWaypoints = [
+        ...editing.waypoints.slice(0, insertAt),
+        newWp,
+        ...editing.waypoints.slice(insertAt),
+      ];
+
+      try {
+        // The old segment at afterSegmentIndex splits into two
+        const [seg1, seg2] = await Promise.all([
+          fetchSegment(newWaypoints[afterSegmentIndex], newWaypoints[afterSegmentIndex + 1], abort.signal),
+          fetchSegment(newWaypoints[afterSegmentIndex + 1], newWaypoints[afterSegmentIndex + 2], abort.signal),
+        ]);
+
+        const newSegments = [
+          ...editing.segments.slice(0, afterSegmentIndex),
+          seg1,
+          seg2,
+          ...editing.segments.slice(afterSegmentIndex + 1),
+        ];
+
+        const stitched = stitchSegments(newSegments);
+        dispatch({
+          type: 'FINISH_REROUTING',
+          segments: newSegments,
+          waypoints: newWaypoints,
+          geometry: stitched.geometry,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        dispatch({
+          type: 'REROUTING_ERROR',
+          message: error instanceof Error ? error.message : 'Routing failed',
+        });
+      }
+    },
+    []
+  );
+
+  const removeWaypoint = useCallback(
+    async (waypointIndex: number) => {
+      const editing = editingRef.current;
+      if (!editing) return;
+
+      const wp = editing.waypoints[waypointIndex];
+      if (!wp || wp.type !== 'via') return;
+
+      // Must keep at least 1 via waypoint
+      const viaCount = editing.waypoints.filter((w) => w.type === 'via').length;
+      if (viaCount <= 1) return;
+
+      rerouteAbortRef.current?.abort();
+      const abort = new AbortController();
+      rerouteAbortRef.current = abort;
+
+      dispatch({ type: 'START_REROUTING' });
+
+      // Compute new waypoints with the point removed
+      const newWaypoints = editing.waypoints.filter((_, i) => i !== waypointIndex);
+
+      try {
+        // The two segments adjacent to the removed waypoint merge into one
+        // In the new array, this segment goes from newWaypoints[waypointIndex-1] to newWaypoints[waypointIndex]
+        const newSeg = await fetchSegment(
+          newWaypoints[waypointIndex - 1],
+          newWaypoints[waypointIndex],
+          abort.signal
+        );
+
+        const newSegments = [
+          ...editing.segments.slice(0, waypointIndex - 1),
+          newSeg,
+          ...editing.segments.slice(waypointIndex + 1),
+        ];
+
+        const stitched = stitchSegments(newSegments);
+        dispatch({
+          type: 'FINISH_REROUTING',
+          segments: newSegments,
+          waypoints: newWaypoints,
+          geometry: stitched.geometry,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        dispatch({
+          type: 'REROUTING_ERROR',
+          message: error instanceof Error ? error.message : 'Routing failed',
+        });
+      }
+    },
+    []
+  );
+
+  return {
+    state,
+    sendMessage,
+    selectRoute,
+    backToOptions,
+    setStartPoint,
+    reset,
+    moveWaypoint,
+    addWaypoint,
+    removeWaypoint,
+    selectWaypoint,
+  };
 }
 
 /** Process a single SSE event and dispatch the appropriate action. */

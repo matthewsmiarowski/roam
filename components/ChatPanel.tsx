@@ -15,6 +15,7 @@ interface ChatPanelProps {
   onBackToOptions: () => void;
   onHoverRoute: (index: number | null) => void;
   onReset: () => void;
+  onDeleteWaypoint?: () => void;
 }
 
 export function ChatPanel({
@@ -24,6 +25,7 @@ export function ChatPanel({
   onBackToOptions,
   onHoverRoute,
   onReset,
+  onDeleteWaypoint,
 }: ChatPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -93,7 +95,12 @@ export function ChatPanel({
           {/* Route detail view (inline after selecting a route) */}
           {selectedOption && (
             <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)]">
-              <RouteDetail option={selectedOption} onBack={onBackToOptions} />
+              <RouteDetail
+                option={selectedOption}
+                onBack={onBackToOptions}
+                editing={state.editing}
+                onDeleteWaypoint={onDeleteWaypoint}
+              />
             </div>
           )}
 
