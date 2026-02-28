@@ -188,8 +188,6 @@ export function conversationReducer(
 
     case 'ADD_WAYPOINT': {
       if (!state.editing) return state;
-      const viaCount = state.editing.waypoints.filter((w) => w.type === 'via').length;
-      if (viaCount >= 8) return state; // max 8 intermediate waypoints
       const newWp: RouteWaypoint = {
         id: crypto.randomUUID(),
         lat: action.lat,

@@ -301,7 +301,7 @@ Desktop-first. When mobile is added:
 - Start marker: green circle (`--color-route-start`), shared across all routes. Hidden in editing mode (replaced by WaypointMarker).
 - Start point marker (from map click): accent-colored circle with ping animation.
 - Map-click sets start point only in `chatting` phase (cursor: crosshair).
-- Auto-fit bounds to all visible routes with padding.
+- Auto-fit bounds to all visible routes with padding. Suppressed during editing mode so the viewport stays stable while the user manipulates waypoints.
 
 ### Waypoint Marker
 

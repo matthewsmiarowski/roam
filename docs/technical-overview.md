@@ -264,7 +264,7 @@ After selecting a route, users can visually edit it by manipulating waypoints on
 
 Each edit calls `POST /api/route/segment` for the affected segments in parallel. The client splices results into the segment array, recomputes the stitched geometry, and updates stats. Unaffected segments are completely untouched.
 
-Constraints: maximum 8 intermediate waypoints, minimum 1 (prevents degenerate out-and-back). Start/end point is not draggable — changing the start requires generating a new route through conversation.
+Constraints: minimum 1 intermediate waypoint (prevents degenerate out-and-back). Start/end point is not draggable — changing the start requires generating a new route through conversation.
 
 ### Geocoding
 

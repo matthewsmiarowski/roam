@@ -289,10 +289,6 @@ export function useChat(): UseChatReturn {
       const editing = editingRef.current;
       if (!editing) return;
 
-      // Enforce max 8 via waypoints
-      const viaCount = editing.waypoints.filter((w) => w.type === 'via').length;
-      if (viaCount >= 8) return;
-
       rerouteAbortRef.current?.abort();
       const abort = new AbortController();
       rerouteAbortRef.current = abort;
