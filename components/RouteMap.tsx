@@ -113,10 +113,10 @@ export function RouteMap({
   }, [routes, selectedRouteIndex]);
 
   useEffect(() => {
-    if (mapRef.current && bounds) {
+    if (mapRef.current && bounds && !editing) {
       mapRef.current.fitBounds(bounds, { padding: 80, duration: 500 });
     }
-  }, [bounds]);
+  }, [bounds, editing]);
 
   // Determine which routes to show in detail mode
   const showSingleSelected =
