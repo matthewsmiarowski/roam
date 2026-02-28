@@ -12,7 +12,18 @@ const RouteMap = dynamic(
 );
 
 export default function Home() {
-  const { state, sendMessage, selectRoute, backToOptions, setStartPoint, reset } = useChat();
+  const {
+    state,
+    sendMessage,
+    selectRoute,
+    backToOptions,
+    setStartPoint,
+    reset,
+    moveWaypoint,
+    addWaypoint,
+    removeWaypoint,
+    selectWaypoint,
+  } = useChat();
   const [hoveredRouteIndex, setHoveredRouteIndex] = useState<number | null>(null);
   const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
 
@@ -22,13 +33,19 @@ export default function Home() {
 
   const handleMapClick = useCallback(
     (lngLat: { lng: number; lat: number }) => {
-      // Allow map-click start point when chatting (not generating/viewing routes)
       if (state.phase === 'chatting') {
+        // Allow map-click start point when chatting (not generating/viewing routes)
         setStartPoint({ lat: lngLat.lat, lng: lngLat.lng });
       }
     },
     [state.phase, setStartPoint]
   );
+
+  const handleDeleteWaypoint = useCallback(() => {
+    if (state.editing?.selectedWaypointIndex != null) {
+      removeWaypoint(state.editing.selectedWaypointIndex);
+    }
+  }, [state.editing?.selectedWaypointIndex, removeWaypoint]);
 
   // Determine what routes to show on the map
   const mapRoutes = state.routeOptions ?? undefined;
@@ -38,10 +55,34 @@ export default function Home() {
 
   const isMapInteractive = state.phase === 'chatting';
 
+  // Use editing geometry when active, otherwise selected route geometry
+  const activeGeometry = state.editing?.geometry ?? selectedRoute?.route.geometry ?? null;
+
   // Clear point hover when selected route changes
   useEffect(() => {
     setHoveredPointIndex(null);
   }, [selectedIndex]);
+
+  // Keyboard shortcuts for editing
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!state.editing) return;
+      // Don't intercept when typing in an input
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (state.editing.selectedWaypointIndex !== null) {
+          e.preventDefault();
+          removeWaypoint(state.editing.selectedWaypointIndex);
+        }
+      } else if (e.key === 'Escape') {
+        selectWaypoint(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [state.editing, removeWaypoint, selectWaypoint]);
 
   return (
     <main className="relative flex h-screen w-screen overflow-hidden">
@@ -54,6 +95,7 @@ export default function Home() {
           onBackToOptions={backToOptions}
           onHoverRoute={setHoveredRouteIndex}
           onReset={reset}
+          onDeleteWaypoint={handleDeleteWaypoint}
         />
       </div>
 
@@ -68,17 +110,22 @@ export default function Home() {
             startPoint={state.startPoint}
             onMapClick={handleMapClick}
             interactive={isMapInteractive}
-            selectedGeometry={selectedRoute?.route.geometry ?? null}
+            selectedGeometry={activeGeometry}
             hoveredPointIndex={hoveredPointIndex}
             onHoverPoint={handleHoverPoint}
+            editing={state.editing}
+            routeColor={selectedRoute?.color}
+            onMoveWaypoint={moveWaypoint}
+            onAddWaypointOnSegment={addWaypoint}
+            onSelectWaypoint={selectWaypoint}
           />
         </div>
 
         {/* Elevation profile — docked to bottom when a route is selected */}
-        {selectedRoute && (
+        {selectedRoute && activeGeometry && (
           <div className="absolute inset-x-0 bottom-0 z-10">
             <ElevationProfile
-              geometry={selectedRoute.route.geometry}
+              geometry={activeGeometry}
               hoveredPointIndex={hoveredPointIndex}
               onHoverPoint={handleHoverPoint}
             />

@@ -259,6 +259,9 @@ Desktop-first. When mobile is added:
 - Route name with color swatch, description, estimated ride time.
 - Full route stats (distance km/mi, elevation m/ft).
 - GPX download button with route-named filename.
+- **Editing controls** (visible when editing is active):
+  - Helper text: "Drag waypoints to reshape. Click route to add a point." Replaces with "Rerouting..." + spinner (Loader2, `animate-spin`) while re-routing is in progress.
+  - Delete waypoint button: appears when a via waypoint is selected and more than 1 via remains. Uses `--color-error` text, Trash2 icon. Disabled during re-routing (`opacity-40`).
 
 ### Difficulty Badge
 
@@ -294,10 +297,21 @@ Desktop-first. When mobile is added:
 - **Multi-route mode (options phase):** 3 routes displayed simultaneously, each in its route option color. Route outline 6px white, route line 4px colored.
 - **Hover highlight:** When a route card is hovered, that route thickens (5px line, 8px outline) and others dim to 30% opacity.
 - **Single-route mode (detail phase):** Only the selected route is shown; others hidden.
-- Start marker: green circle (`--color-route-start`), shared across all routes.
+- **Editing mode (detail phase with editing):** Route rendered as individual segment layers (`editing-segment-line-{i}`) instead of a single line. Segments dim to 50% opacity during re-routing. Draggable waypoint markers overlay the route. Start marker replaced by WaypointMarker (green, non-draggable). Click on segment line adds a waypoint; click on empty map appends a waypoint before the return-to-start leg.
+- Start marker: green circle (`--color-route-start`), shared across all routes. Hidden in editing mode (replaced by WaypointMarker).
 - Start point marker (from map click): accent-colored circle with ping animation.
 - Map-click sets start point only in `chatting` phase (cursor: crosshair).
 - Auto-fit bounds to all visible routes with padding.
+
+### Waypoint Marker
+
+- Rendered by `WaypointMarker` component using react-map-gl's `<Marker draggable>`.
+- **Start/end marker:** 16px circle, `--color-route-start` (green), 2px white border, not draggable.
+- **Via marker:** 24px circle, route option color, 2px white border, numbered (1-based), draggable. Cursor: `grab`.
+- **Selected state:** 3px ring highlight in the route color (`box-shadow`).
+- Click to select (toggles selection). Start markers are not selectable.
+- Drag disabled during re-routing (`isRerouting`).
+- Keyboard shortcuts: Delete/Backspace removes selected waypoint, Escape clears selection. Shortcuts are suppressed when focus is in an input/textarea.
 
 ### GPX Download Button
 
@@ -320,6 +334,7 @@ Keep it fast and functional. The sport is cycling, not ballet.
 - No motion for route line drawing — let MapLibre handle map animations natively.
 - Typing indicator dots: 1.4s cycle, `ease-in-out`, staggered 0.2s per dot.
 - Start point ping: 1.5s cycle, `ease-out`, scales from 1x to 2.5x with opacity fade.
+- Re-routing spinner: Lucide `Loader2` icon with Tailwind `animate-spin`. Shown in RouteDetail during segment re-routing.
 - `prefers-reduced-motion: reduce` — collapse all transitions to instant.
 
 ---

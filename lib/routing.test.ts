@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { haversine, projectPoint, type LatLng } from './geo';
-import type { Coordinate3D, RouteParams } from './types';
+import type { Coordinate3D, RouteParams, RouteSegment } from './types';
 import {
   calculateRadius,
   generateWaypoints,
@@ -8,6 +8,7 @@ import {
   generateRoute,
   mergeWaypoints,
   generateRouteSingleAttempt,
+  stitchSegments,
 } from './routing';
 
 const girona: LatLng = { lat: 41.9794, lng: 2.8214 };
@@ -100,6 +101,7 @@ beforeEach(() => {
 
 const baseParams: RouteParams = {
   start_location: 'Girona, Spain',
+  start_precision: 'general',
   target_distance_km: 60,
   elevation_character: 'hilly',
   road_preference: 'quiet_roads',
@@ -172,6 +174,218 @@ function makeGraphHopperResponse(
     }),
   };
 }
+
+/** Create a mock response for a segment call (2-point, no loop closure). */
+function makeSegmentResponse(
+  distanceMeters: number,
+  options?: { ascend?: number; coordinates?: [number, number, number][] }
+) {
+  return {
+    ok: true,
+    json: async () => ({
+      paths: [
+        {
+          distance: distanceMeters,
+          ascend: options?.ascend ?? 125,
+          descend: 120,
+          points: {
+            coordinates: options?.coordinates ?? [
+              [2.8, 42.0, 100],
+              [2.85, 42.02, 150],
+              [2.9, 42.05, 120],
+            ],
+          },
+        },
+      ],
+    }),
+  };
+}
+
+// --- stitchSegments (pure function tests) ---
+
+describe('stitchSegments', () => {
+  it('returns empty for no segments', () => {
+    const result = stitchSegments([]);
+    expect(result.geometry).toEqual([]);
+    expect(result.distance_km).toBe(0);
+    expect(result.elevation_gain_m).toBe(0);
+  });
+
+  it('returns the single segment as-is', () => {
+    const seg: RouteSegment = {
+      from: { lat: 42.0, lng: 2.8 },
+      to: { lat: 42.1, lng: 2.9 },
+      geometry: [
+        [42.0, 2.8, 100],
+        [42.05, 2.85, 150],
+        [42.1, 2.9, 120],
+      ],
+      distance_km: 15,
+      elevation_gain_m: 200,
+    };
+    const result = stitchSegments([seg]);
+    expect(result.geometry).toEqual(seg.geometry);
+    expect(result.distance_km).toBe(15);
+    expect(result.elevation_gain_m).toBe(200);
+  });
+
+  it('deduplicates boundary points between segments', () => {
+    const seg1: RouteSegment = {
+      from: { lat: 42.0, lng: 2.8 },
+      to: { lat: 42.1, lng: 2.9 },
+      geometry: [
+        [42.0, 2.8, 100],
+        [42.05, 2.85, 150],
+        [42.1, 2.9, 120],
+      ],
+      distance_km: 10,
+      elevation_gain_m: 50,
+    };
+    const seg2: RouteSegment = {
+      from: { lat: 42.1, lng: 2.9 },
+      to: { lat: 42.2, lng: 3.0 },
+      geometry: [
+        [42.1, 2.9, 120], // duplicate of seg1's last point
+        [42.15, 2.95, 180],
+        [42.2, 3.0, 100],
+      ],
+      distance_km: 12,
+      elevation_gain_m: 60,
+    };
+
+    const result = stitchSegments([seg1, seg2]);
+
+    // 3 from seg1 + 2 from seg2 (first point skipped) = 5
+    expect(result.geometry).toHaveLength(5);
+    expect(result.geometry[2]).toEqual([42.1, 2.9, 120]); // boundary point appears once
+    expect(result.geometry[3]).toEqual([42.15, 2.95, 180]);
+    expect(result.distance_km).toBe(22);
+    expect(result.elevation_gain_m).toBe(110);
+  });
+
+  it('sums stats across multiple segments', () => {
+    const segments: RouteSegment[] = [
+      {
+        from: { lat: 0, lng: 0 },
+        to: { lat: 1, lng: 1 },
+        geometry: [[0, 0, 0], [1, 1, 100]],
+        distance_km: 5,
+        elevation_gain_m: 100,
+      },
+      {
+        from: { lat: 1, lng: 1 },
+        to: { lat: 2, lng: 2 },
+        geometry: [[1, 1, 100], [2, 2, 200]],
+        distance_km: 7,
+        elevation_gain_m: 150,
+      },
+      {
+        from: { lat: 2, lng: 2 },
+        to: { lat: 0, lng: 0 },
+        geometry: [[2, 2, 200], [0, 0, 50]],
+        distance_km: 8,
+        elevation_gain_m: 0,
+      },
+    ];
+
+    const result = stitchSegments(segments);
+    expect(result.geometry).toHaveLength(4); // 2 + 1 + 1
+    expect(result.distance_km).toBe(20);
+    expect(result.elevation_gain_m).toBe(250);
+  });
+});
+
+// --- callGraphHopperSegment and routeViaSegments ---
+
+describe('callGraphHopperSegment', () => {
+  it('sends exactly 2 points (no loop closure)', async () => {
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000));
+
+    const { callGraphHopperSegment } = await import('./routing');
+    await callGraphHopperSegment({ lat: 42.0, lng: 2.8 }, { lat: 42.1, lng: 2.9 });
+
+    const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(callBody.points).toHaveLength(2);
+    expect(callBody.points[0]).toEqual([2.8, 42.0]); // [lng, lat]
+    expect(callBody.points[1]).toEqual([2.9, 42.1]);
+  });
+
+  it('converts response coordinates from [lng,lat,ele] to [lat,lng,ele]', async () => {
+    const coords: [number, number, number][] = [
+      [2.8, 42.0, 100],
+      [2.9, 42.1, 200],
+    ];
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000, { coordinates: coords }));
+
+    const { callGraphHopperSegment } = await import('./routing');
+    const result = await callGraphHopperSegment(
+      { lat: 42.0, lng: 2.8 },
+      { lat: 42.1, lng: 2.9 }
+    );
+
+    expect(result.geometry[0]).toEqual([42.0, 2.8, 100]); // [lat, lng, ele]
+    expect(result.geometry[1]).toEqual([42.1, 2.9, 200]);
+  });
+
+  it('throws on GraphHopper error', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'Bad request',
+    });
+
+    const { callGraphHopperSegment } = await import('./routing');
+    await expect(
+      callGraphHopperSegment({ lat: 42.0, lng: 2.8 }, { lat: 42.1, lng: 2.9 })
+    ).rejects.toThrow('GraphHopper error 400');
+  });
+});
+
+describe('routeViaSegments', () => {
+  it('makes N-1 parallel calls for N waypoints', async () => {
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000));
+
+    const { routeViaSegments } = await import('./routing');
+    const waypoints: LatLng[] = [
+      { lat: 42.0, lng: 2.8 },
+      { lat: 42.1, lng: 2.9 },
+      { lat: 42.2, lng: 3.0 },
+      { lat: 42.0, lng: 2.8 }, // return to start
+    ];
+
+    const segments = await routeViaSegments(waypoints);
+
+    expect(mockFetch).toHaveBeenCalledTimes(3); // 4 waypoints = 3 segments
+    expect(segments).toHaveLength(3);
+  });
+
+  it('returns correct from/to for each segment', async () => {
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000));
+
+    const { routeViaSegments } = await import('./routing');
+    const waypoints: LatLng[] = [
+      { lat: 42.0, lng: 2.8 },
+      { lat: 42.1, lng: 2.9 },
+      { lat: 42.0, lng: 2.8 },
+    ];
+
+    const segments = await routeViaSegments(waypoints);
+
+    expect(segments[0].from).toEqual({ lat: 42.0, lng: 2.8 });
+    expect(segments[0].to).toEqual({ lat: 42.1, lng: 2.9 });
+    expect(segments[1].from).toEqual({ lat: 42.1, lng: 2.9 });
+    expect(segments[1].to).toEqual({ lat: 42.0, lng: 2.8 });
+  });
+
+  it('throws for fewer than 2 waypoints', async () => {
+    const { routeViaSegments } = await import('./routing');
+    await expect(routeViaSegments([{ lat: 42.0, lng: 2.8 }])).rejects.toThrow(
+      'Need at least 2 waypoints'
+    );
+  });
+});
+
+// --- v0: generateRoute (uses callGraphHopper, unchanged) ---
 
 describe('generateRoute', () => {
   it('converts GraphHopper [lng,lat,ele] to [lat,lng,ele]', async () => {
@@ -546,40 +760,66 @@ describe('mergeWaypoints', () => {
   });
 });
 
-// --- v1: generateRouteSingleAttempt ---
+// --- generateRouteSingleAttempt (uses segment-based stitching) ---
 
 describe('generateRouteSingleAttempt', () => {
-  it('generates a route with a single GraphHopper call', async () => {
-    mockFetch.mockResolvedValue(makeGraphHopperResponse(60000));
+  it('makes 4 segment calls (start + 3 waypoints + return)', async () => {
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000));
 
     const route = await generateRouteSingleAttempt(baseParams, girona);
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(route.distance_km).toBe(60);
+    // 3 waypoints = 4 segments: start→wp1, wp1→wp2, wp2→wp3, wp3→start
+    expect(mockFetch).toHaveBeenCalledTimes(4);
     expect(route.start_point).toEqual({ lat: girona.lat, lng: girona.lng });
   });
 
-  it('does not retry on distance mismatch', async () => {
-    // Returns 90km — way off target, but single-attempt should not retry
-    mockFetch.mockResolvedValue(makeGraphHopperResponse(90000));
+  it('returns stitched distance as sum of segments', async () => {
+    // Each segment returns 15km → total should be 60km
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000));
 
     const route = await generateRouteSingleAttempt(baseParams, girona);
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(route.distance_km).toBe(90);
+    expect(route.distance_km).toBe(60);
   });
 
-  it('passes named waypoint coords to GraphHopper', async () => {
-    mockFetch.mockResolvedValue(makeGraphHopperResponse(60000));
+  it('returns segments and waypoints for editing', async () => {
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000));
+
+    const route = await generateRouteSingleAttempt(baseParams, girona);
+
+    expect(route.segments).toHaveLength(4);
+    expect(route.waypoints).toHaveLength(5); // start + 3 via + end (=start)
+    expect(route.waypoints![0].type).toBe('start');
+    expect(route.waypoints![1].type).toBe('via');
+    expect(route.waypoints![2].type).toBe('via');
+    expect(route.waypoints![3].type).toBe('via');
+    expect(route.waypoints![4].type).toBe('start');
+  });
+
+  it('sends 2-point requests (no loop closure per segment)', async () => {
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000));
+
+    await generateRouteSingleAttempt(baseParams, girona);
+
+    // Each call should have exactly 2 points
+    for (const call of mockFetch.mock.calls) {
+      const body = JSON.parse(call[1].body);
+      expect(body.points).toHaveLength(2);
+    }
+  });
+
+  it('passes named waypoint coords to segment calls', async () => {
+    mockFetch.mockResolvedValue(makeSegmentResponse(15000));
 
     const namedWp: LatLng = { lat: 42.03, lng: 2.78 };
     await generateRouteSingleAttempt(baseParams, girona, [namedWp]);
 
-    const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    // Should have start + 3 waypoints (1 named + 2 bearing) + return to start
-    expect(callBody.points).toHaveLength(5);
-    // Named waypoint should be included in the waypoints
-    const hasNamedWp = callBody.points.some(
+    // Named waypoint should appear as an endpoint in at least one segment call
+    const allPoints = mockFetch.mock.calls.flatMap((call: unknown[]) => {
+      const body = JSON.parse((call[1] as { body: string }).body);
+      return body.points as number[][];
+    });
+    const hasNamedWp = allPoints.some(
       (p: number[]) => Math.abs(p[0] - namedWp.lng) < 0.01 && Math.abs(p[1] - namedWp.lat) < 0.01
     );
     expect(hasNamedWp).toBe(true);

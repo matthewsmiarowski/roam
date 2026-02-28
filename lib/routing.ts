@@ -7,7 +7,7 @@
  */
 
 import { type LatLng, projectPoint, isStarShaped } from './geo';
-import type { RouteParams, RouteData, Coordinate3D } from './types';
+import type { RouteParams, RouteData, RouteSegment, RouteWaypoint, Coordinate3D } from './types';
 
 const GRAPHHOPPER_BASE = 'https://graphhopper.com/api/1/route';
 const STRETCH_FACTOR = 1.3;
@@ -18,8 +18,8 @@ const STAR_BEARING_ROTATION = 30;
 const MAX_POINT_NOT_FOUND_RETRIES = 7;
 const POINT_NOT_FOUND_RADIUS_SHRINK = 0.95;
 const POINT_NOT_FOUND_BEARING_ROTATION = 45;
-const KM_TO_MI = 0.621371;
-const M_TO_FT = 3.28084;
+export const KM_TO_MI = 0.621371;
+export const M_TO_FT = 3.28084;
 
 class PointNotFoundError extends Error {
   readonly pointIndex: number;
@@ -121,6 +121,100 @@ function parseGraphHopperResponse(gh: GraphHopperResponse): {
     elevation_gain_m: path.ascend,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Segment-based routing (v2: multi-leg stitching)
+// ---------------------------------------------------------------------------
+
+/**
+ * Route between exactly 2 points (no loop closure).
+ * Used for segment-based routing where each leg is routed independently.
+ */
+export async function callGraphHopperSegment(
+  from: LatLng,
+  to: LatLng
+): Promise<{ geometry: Coordinate3D[]; distance_km: number; elevation_gain_m: number }> {
+  const body = {
+    points: [
+      [from.lng, from.lat],
+      [to.lng, to.lat],
+    ],
+    profile: 'bike',
+    points_encoded: false,
+    elevation: true,
+    instructions: false,
+    calc_points: true,
+  };
+
+  const res = await fetch(`${GRAPHHOPPER_BASE}?key=${process.env.GRAPHHOPPER_API_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GraphHopper error ${res.status}: ${text}`);
+  }
+
+  const gh: GraphHopperResponse = await res.json();
+  return parseGraphHopperResponse(gh);
+}
+
+/**
+ * Route through an ordered list of waypoints, one segment at a time.
+ * Each consecutive pair gets its own GraphHopper call, all run in parallel.
+ * Returns an array of RouteSegments.
+ */
+export async function routeViaSegments(waypoints: LatLng[]): Promise<RouteSegment[]> {
+  if (waypoints.length < 2) throw new Error('Need at least 2 waypoints');
+
+  const segmentPromises: Promise<RouteSegment>[] = [];
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const from = waypoints[i];
+    const to = waypoints[i + 1];
+    segmentPromises.push(
+      callGraphHopperSegment(from, to).then((result) => ({
+        from: { lat: from.lat, lng: from.lng },
+        to: { lat: to.lat, lng: to.lng },
+        ...result,
+      }))
+    );
+  }
+
+  return Promise.all(segmentPromises);
+}
+
+/**
+ * Concatenate segment geometries into a single flat array.
+ * Skips the first point of each subsequent segment (duplicate of previous segment's last point).
+ * Sums distances and elevation gains.
+ */
+export function stitchSegments(segments: RouteSegment[]): {
+  geometry: Coordinate3D[];
+  distance_km: number;
+  elevation_gain_m: number;
+} {
+  if (segments.length === 0) return { geometry: [], distance_km: 0, elevation_gain_m: 0 };
+
+  const geometry: Coordinate3D[] = [...segments[0].geometry];
+  let distance_km = segments[0].distance_km;
+  let elevation_gain_m = segments[0].elevation_gain_m;
+
+  for (let i = 1; i < segments.length; i++) {
+    // Skip first point (duplicate of previous segment's last point)
+    geometry.push(...segments[i].geometry.slice(1));
+    distance_km += segments[i].distance_km;
+    elevation_gain_m += segments[i].elevation_gain_m;
+  }
+
+  return { geometry, distance_km, elevation_gain_m };
+}
+
+// ---------------------------------------------------------------------------
+// v0: Loop generation with retry
+// ---------------------------------------------------------------------------
 
 function rotateBearings(bearings: number[], offsetDeg: number): number[] {
   return bearings.map((b) => (b + offsetDeg) % 360);
@@ -280,6 +374,7 @@ function buildRouteData(
 
 // ---------------------------------------------------------------------------
 // v1: Single-attempt route generation with named waypoint support
+// Uses segment-based stitching so routes are immediately editable (v2).
 // ---------------------------------------------------------------------------
 
 /**
@@ -296,11 +391,11 @@ export function mergeWaypoints(bearingWaypoints: LatLng[], namedWaypoints: LatLn
 
 /**
  * Generate a single route in one attempt (no retry loop).
- * Used by the v1 conversation pipeline to generate 3 options in parallel.
+ * Used by the conversation pipeline to generate 3 options in parallel.
  *
  * Named waypoints (already geocoded) are merged with bearing-based waypoints.
- * No distance retry or star-shaped detection — speed over precision for
- * the comparison view. The user picks one, and we show it as-is.
+ * Routes via segment-based stitching: each leg (start→wp1, wp1→wp2, etc.)
+ * is routed independently, enabling localized editing in v2.
  *
  * @throws {Error} if GraphHopper fails
  */
@@ -322,9 +417,22 @@ export async function generateRouteSingleAttempt(
 
   const bearingWaypoints = generateWaypoints(loopCenter, sortedBearings, radiusKm);
   const waypoints = mergeWaypoints(bearingWaypoints, namedWaypointCoords);
-  const allPoints = [start, ...waypoints];
 
-  const ghResponse = await callGraphHopper(allPoints);
-  const result = parseGraphHopperResponse(ghResponse);
-  return buildRouteData(result, start);
+  // Route via segments: start → wp1 → wp2 → wp3 → start
+  const orderedPoints: LatLng[] = [start, ...waypoints, start];
+  const segments = await routeViaSegments(orderedPoints);
+  const stitched = stitchSegments(segments);
+
+  // Build RouteWaypoint array for editing
+  const routeWaypoints: RouteWaypoint[] = orderedPoints.map((p, i) => ({
+    id: crypto.randomUUID(),
+    lat: p.lat,
+    lng: p.lng,
+    type: i === 0 || i === orderedPoints.length - 1 ? 'start' : 'via',
+  }));
+
+  const routeData = buildRouteData(stitched, start);
+  routeData.segments = segments;
+  routeData.waypoints = routeWaypoints;
+  return routeData;
 }
