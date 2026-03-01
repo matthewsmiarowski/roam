@@ -77,6 +77,7 @@ async function callGraphHopper(points: LatLng[]): Promise<GraphHopperResponse> {
   const body = {
     points: allPoints.map((p) => [p.lng, p.lat]),
     profile: 'bike',
+    snap_preventions: ['motorway', 'trunk', 'ferry'],
     points_encoded: false,
     elevation: true,
     instructions: false,
@@ -140,6 +141,7 @@ export async function callGraphHopperSegment(
       [to.lng, to.lat],
     ],
     profile: 'bike',
+    snap_preventions: ['motorway', 'trunk', 'ferry'],
     points_encoded: false,
     elevation: true,
     instructions: false,

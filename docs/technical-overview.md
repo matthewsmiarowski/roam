@@ -280,6 +280,7 @@ Primary mechanism: the LLM's bearing suggestions route through hilly vs flat ter
 {
   "points": [[lng1, lat1], [lng2, lat2], ...],
   "profile": "bike",
+  "snap_preventions": ["motorway", "trunk", "ferry"],
   "points_encoded": false,
   "elevation": true,
   "instructions": false,
@@ -287,7 +288,9 @@ Primary mechanism: the LLM's bearing suggestions route through hilly vs flat ter
 }
 ```
 
-The `bike` profile avoids highways, prefers cycling infrastructure, and penalizes high-traffic roads using OSM road classification.
+The `bike` profile avoids highways, prefers cycling infrastructure, and penalizes high-traffic roads using OSM road classification. `snap_preventions` prevents waypoints from snapping to motorways, trunk roads, or ferry routes — ensuring points always attach to bike-appropriate roads even when near highway on-ramps.
+
+Note: the GraphHopper free tier only supports the `car`, `bike`, and `foot` profiles. Advanced features like `custom_model` and `ch.disable` (flexible routing mode) require a paid plan.
 
 ---
 
