@@ -9,6 +9,9 @@ import {
   mergeWaypoints,
   generateRouteSingleAttempt,
   stitchSegments,
+  callGraphHopperSegment,
+  RateLimitError,
+  QuotaExhaustedError,
 } from './routing';
 
 const girona: LatLng = { lat: 41.9794, lng: 2.8214 };
@@ -268,21 +271,30 @@ describe('stitchSegments', () => {
       {
         from: { lat: 0, lng: 0 },
         to: { lat: 1, lng: 1 },
-        geometry: [[0, 0, 0], [1, 1, 100]],
+        geometry: [
+          [0, 0, 0],
+          [1, 1, 100],
+        ],
         distance_km: 5,
         elevation_gain_m: 100,
       },
       {
         from: { lat: 1, lng: 1 },
         to: { lat: 2, lng: 2 },
-        geometry: [[1, 1, 100], [2, 2, 200]],
+        geometry: [
+          [1, 1, 100],
+          [2, 2, 200],
+        ],
         distance_km: 7,
         elevation_gain_m: 150,
       },
       {
         from: { lat: 2, lng: 2 },
         to: { lat: 0, lng: 0 },
-        geometry: [[2, 2, 200], [0, 0, 50]],
+        geometry: [
+          [2, 2, 200],
+          [0, 0, 50],
+        ],
         distance_km: 8,
         elevation_gain_m: 0,
       },
@@ -318,10 +330,7 @@ describe('callGraphHopperSegment', () => {
     mockFetch.mockResolvedValue(makeSegmentResponse(15000, { coordinates: coords }));
 
     const { callGraphHopperSegment } = await import('./routing');
-    const result = await callGraphHopperSegment(
-      { lat: 42.0, lng: 2.8 },
-      { lat: 42.1, lng: 2.9 }
-    );
+    const result = await callGraphHopperSegment({ lat: 42.0, lng: 2.8 }, { lat: 42.1, lng: 2.9 });
 
     expect(result.geometry[0]).toEqual([42.0, 2.8, 100]); // [lat, lng, ele]
     expect(result.geometry[1]).toEqual([42.1, 2.9, 200]);
@@ -835,5 +844,85 @@ describe('generateRouteSingleAttempt', () => {
     await expect(generateRouteSingleAttempt(baseParams, girona)).rejects.toThrow(
       'GraphHopper error 400'
     );
+  });
+});
+
+// --- Rate limit and quota handling ---
+
+describe('fetchWithRetry (via callGraphHopperSegment)', () => {
+  it('retries on 429 and succeeds on subsequent attempt', async () => {
+    vi.useFakeTimers();
+    mockFetch
+      .mockResolvedValueOnce({
+        status: 429,
+        text: async () => 'Too many requests',
+      })
+      .mockResolvedValueOnce(makeSegmentResponse(15000));
+
+    const promise = callGraphHopperSegment({ lat: 42.0, lng: 2.8 }, { lat: 42.1, lng: 2.9 });
+
+    // Advance past the first retry delay (1000ms)
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.distance_km).toBeCloseTo(15, 0);
+    vi.useRealTimers();
+  });
+
+  it('throws RateLimitError after exhausting retries', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockResolvedValue({
+      status: 429,
+      text: async () => 'Too many requests',
+    });
+
+    const promise = callGraphHopperSegment({ lat: 42.0, lng: 2.8 }, { lat: 42.1, lng: 2.9 }).catch(
+      (e: unknown) => e
+    ); // Capture rejection to avoid unhandled rejection warning
+
+    // Advance past all retry delays: 1s + 2s + 4s
+    await vi.advanceTimersByTimeAsync(7000);
+
+    const error = await promise;
+    expect(error).toBeInstanceOf(RateLimitError);
+    expect(mockFetch).toHaveBeenCalledTimes(4); // initial + 3 retries
+    vi.useRealTimers();
+  });
+
+  it('throws QuotaExhaustedError immediately on daily quota response', async () => {
+    mockFetch.mockResolvedValue({
+      status: 429,
+      text: async () => 'You have exceeded your daily credit limit',
+    });
+
+    await expect(
+      callGraphHopperSegment({ lat: 42.0, lng: 2.8 }, { lat: 42.1, lng: 2.9 })
+    ).rejects.toThrow(QuotaExhaustedError);
+
+    // Should not retry — only 1 call
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws QuotaExhaustedError for quota-related messages', async () => {
+    mockFetch.mockResolvedValue({
+      status: 429,
+      text: async () => 'Daily quota exceeded for this API key',
+    });
+
+    await expect(
+      callGraphHopperSegment({ lat: 42.0, lng: 2.8 }, { lat: 42.1, lng: 2.9 })
+    ).rejects.toThrow(QuotaExhaustedError);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates quota errors through generateRoute', async () => {
+    mockFetch.mockResolvedValue({
+      status: 429,
+      text: async () => 'You have exceeded your daily credit limit',
+    });
+
+    await expect(generateRoute(baseParams, girona)).rejects.toThrow(QuotaExhaustedError);
   });
 });

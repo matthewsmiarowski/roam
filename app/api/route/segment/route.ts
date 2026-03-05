@@ -7,7 +7,13 @@
  */
 
 import { NextRequest } from 'next/server';
-import { callGraphHopperSegment, KM_TO_MI, M_TO_FT } from '@/lib/routing';
+import {
+  callGraphHopperSegment,
+  KM_TO_MI,
+  M_TO_FT,
+  RateLimitError,
+  QuotaExhaustedError,
+} from '@/lib/routing';
 
 interface SegmentRequest {
   from: { lat: number; lng: number };
@@ -55,6 +61,25 @@ export async function POST(request: NextRequest) {
       elevation_gain_ft: Math.round(result.elevation_gain_m * M_TO_FT),
     });
   } catch (error) {
+    if (error instanceof QuotaExhaustedError) {
+      return Response.json(
+        {
+          error:
+            'Daily routing limit reached (free tier). Resets at midnight UTC. Try again tomorrow!',
+          errorType: 'quota_exhausted',
+        },
+        { status: 429 }
+      );
+    }
+    if (error instanceof RateLimitError) {
+      return Response.json(
+        {
+          error: 'Routing service is busy. Wait 30 seconds and try again.',
+          errorType: 'rate_limited',
+        },
+        { status: 429 }
+      );
+    }
     const message = error instanceof Error ? error.message : 'Routing failed';
     return Response.json({ error: message }, { status: 500 });
   }

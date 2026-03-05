@@ -137,9 +137,10 @@ export function RouteMap({
       // In editing mode, check editing segment layers
       if (editing && editing.segments.length > 0) {
         try {
-          const segmentLayerIds = editing.segments.map(
-            (_, i) => `editing-segment-line-${i}`
-          );
+          const segmentLayerIds = editing.segments
+            .map((_, i) => `editing-segment-line-${i}`)
+            .filter((id) => mapRef.current!.getLayer(id));
+          if (segmentLayerIds.length === 0) return;
           const features = mapRef.current.queryRenderedFeatures(bbox, {
             layers: segmentLayerIds,
           });
@@ -221,9 +222,10 @@ export function RouteMap({
         // In editing mode, handle all click types here and return
         if (editing && editing.segments.length > 0 && mapRef.current) {
           try {
-            const segmentLayerIds = editing.segments.map(
-              (_, i) => `editing-segment-line-${i}`
-            );
+            const segmentLayerIds = editing.segments
+              .map((_, i) => `editing-segment-line-${i}`)
+              .filter((id) => mapRef.current!.getLayer(id));
+            if (segmentLayerIds.length === 0) return;
             const clickBbox: [[number, number], [number, number]] = [
               [e.point.x - 5, e.point.y - 5],
               [e.point.x + 5, e.point.y + 5],
@@ -235,11 +237,7 @@ export function RouteMap({
               const layerId = features[0].layer?.id;
               const match = layerId?.match(/editing-segment-line-(\d+)/);
               if (match) {
-                onAddWaypointOnSegment?.(
-                  parseInt(match[1], 10),
-                  e.lngLat.lat,
-                  e.lngLat.lng
-                );
+                onAddWaypointOnSegment?.(parseInt(match[1], 10), e.lngLat.lat, e.lngLat.lng);
                 return;
               }
             }
@@ -353,14 +351,14 @@ export function RouteMap({
               draggable={!isStart && !editing.isRerouting}
               onDragEnd={(lat, lng) => {
                 skipNextClickRef.current = true;
-                setTimeout(() => { skipNextClickRef.current = false; }, 0);
+                setTimeout(() => {
+                  skipNextClickRef.current = false;
+                }, 0);
                 onMoveWaypoint?.(wpIdx, lat, lng);
               }}
               onClick={() => {
                 if (!isStart) {
-                  onSelectWaypoint?.(
-                    editing.selectedWaypointIndex === wpIdx ? null : wpIdx
-                  );
+                  onSelectWaypoint?.(editing.selectedWaypointIndex === wpIdx ? null : wpIdx);
                 }
               }}
             />
@@ -403,11 +401,7 @@ export function RouteMap({
 
       {/* Hover point marker (synced with elevation profile) */}
       {hoverMarkerCoord && (
-        <Marker
-          longitude={hoverMarkerCoord[1]}
-          latitude={hoverMarkerCoord[0]}
-          anchor="center"
-        >
+        <Marker longitude={hoverMarkerCoord[1]} latitude={hoverMarkerCoord[0]} anchor="center">
           <div
             className="h-3 w-3 rounded-full border-2 border-white"
             style={{

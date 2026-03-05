@@ -9,6 +9,7 @@
 import { NextRequest } from 'next/server';
 import { streamConversation } from '@/lib/llm';
 import { generateRouteOptions } from '@/lib/conversation';
+import { RateLimitError, QuotaExhaustedError } from '@/lib/routing';
 import type { ChatRequest, RouteOption } from '@/lib/types';
 
 /** Send a single SSE event. */
@@ -36,6 +37,12 @@ function formatUserError(error: unknown): string {
   }
   if (message.includes('overloaded') || message.includes('529')) {
     return "I'm a bit overloaded right now. Give me a moment and try again.";
+  }
+  if (error instanceof QuotaExhaustedError) {
+    return "Roam has hit its daily routing limit — we're on a free API tier during early access. The limit resets at midnight UTC. Please try again tomorrow!";
+  }
+  if (error instanceof RateLimitError) {
+    return 'The routing service is getting too many requests right now. Please wait about 30 seconds and try again.';
   }
   if (message.includes('rate limit') || message.includes('429')) {
     return "I'm getting a lot of requests right now. Wait a moment and try again.";

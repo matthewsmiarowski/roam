@@ -30,6 +30,20 @@ class PointNotFoundError extends Error {
   }
 }
 
+export class RateLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RateLimitError';
+  }
+}
+
+export class QuotaExhaustedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QuotaExhaustedError';
+  }
+}
+
 interface GraphHopperPath {
   distance: number;
   ascend: number;
@@ -71,6 +85,40 @@ export function calculateElevationGain(geometry: Coordinate3D[]): number {
   return gain;
 }
 
+const RATE_LIMIT_MAX_RETRIES = 3;
+const RATE_LIMIT_BASE_DELAY_MS = 1000;
+
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; attempt <= RATE_LIMIT_MAX_RETRIES; attempt++) {
+    const res = await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (res.status === 429) {
+      const text = await res.text();
+
+      if (/credit|quota|daily/i.test(text)) {
+        throw new QuotaExhaustedError(`GraphHopper daily quota exhausted: ${text}`);
+      }
+
+      if (attempt < RATE_LIMIT_MAX_RETRIES) {
+        const delay = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+
+      throw new RateLimitError(
+        `GraphHopper rate limited after ${RATE_LIMIT_MAX_RETRIES + 1} attempts: ${text}`
+      );
+    }
+
+    return res;
+  }
+
+  throw new Error('Unexpected: fetchWithRetry fell through');
+}
+
 async function callGraphHopper(points: LatLng[]): Promise<GraphHopperResponse> {
   const allPoints = [points[0], ...points.slice(1), points[0]];
 
@@ -84,11 +132,10 @@ async function callGraphHopper(points: LatLng[]): Promise<GraphHopperResponse> {
     calc_points: true,
   };
 
-  const res = await fetch(`${GRAPHHOPPER_BASE}?key=${process.env.GRAPHHOPPER_API_KEY}`, {
+  const res = await fetchWithRetry(`${GRAPHHOPPER_BASE}?key=${process.env.GRAPHHOPPER_API_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
@@ -148,11 +195,10 @@ export async function callGraphHopperSegment(
     calc_points: true,
   };
 
-  const res = await fetch(`${GRAPHHOPPER_BASE}?key=${process.env.GRAPHHOPPER_API_KEY}`, {
+  const res = await fetchWithRetry(`${GRAPHHOPPER_BASE}?key=${process.env.GRAPHHOPPER_API_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
