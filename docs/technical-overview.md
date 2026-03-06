@@ -1,6 +1,6 @@
 # Technical Overview
 
-**Last Updated: February 2026**
+**Last Updated: March 2026**
 
 This document describes the architecture, technical decisions, and implementation details of Roam. A new engineer should be able to read this and understand how everything works.
 
@@ -176,7 +176,7 @@ Used by the client during visual editing to re-route individual segments. No LLM
 }
 ```
 
-Error responses: 400 for invalid input, 500 for GraphHopper failures.
+Error responses: 400 for invalid input, 429 for rate limit / quota exhaustion (with `errorType` field), 500 for other GraphHopper failures.
 
 ---
 
@@ -249,6 +249,8 @@ Route structure:
 ```
 
 Key functions in `lib/routing.ts`:
+
+- **`fetchWithRetry(url, init)`** — wraps `fetch` with exponential backoff (1s, 2s, 4s) on HTTP 429. Throws `QuotaExhaustedError` immediately for daily quota responses (no retry), `RateLimitError` after exhausting retries.
 - **`callGraphHopperSegment(from, to)`** — point-to-point routing between 2 points (no loop closure)
 - **`routeViaSegments(waypoints)`** — parallel segment routing for an ordered waypoint list
 - **`stitchSegments(segments)`** — concatenates segment geometries, sums stats, deduplicates boundary points
@@ -309,13 +311,13 @@ interface ConversationState {
   selectedRouteIndex: number | null;
   userLocation: { latitude: number; longitude: number } | null;
   startPoint: { lat: number; lng: number } | null;
-  editing: EditingState | null;  // non-null when in detail phase with editable route
+  editing: EditingState | null; // non-null when in detail phase with editable route
 }
 
 interface EditingState {
   waypoints: RouteWaypoint[];
   segments: RouteSegment[];
-  geometry: Coordinate3D[];      // pre-computed stitched geometry
+  geometry: Coordinate3D[]; // pre-computed stitched geometry
   isRerouting: boolean;
   selectedWaypointIndex: number | null;
 }
@@ -384,16 +386,17 @@ GPX XML is returned inline with each route option. The frontend creates a Blob a
 
 ## Error Handling
 
-| Failure                 | User message                                | Server behavior                                            |
-| ----------------------- | ------------------------------------------- | ---------------------------------------------------------- |
-| LLM can't parse prompt  | "I couldn't understand that request..."     | Log raw prompt and LLM response                            |
-| Geocoding fails         | "I couldn't find that location..."          | Log the location string; tries simplified variants first   |
-| No route found          | "Couldn't generate a route in that area..." | Log waypoints and engine response                          |
-| Routing engine timeout  | "Route generation timed out..."             | 30-second timeout on GraphHopper calls                     |
-| Distance can't converge | Return best attempt with a note             | "Route is Xkm — couldn't exactly match your target of Ykm" |
-| LLM overloaded (529)    | "The AI service is temporarily busy..."     | Anthropic SDK retries up to 5× with exponential backoff    |
-| API rate limit (429)    | "Service is temporarily busy..."            | Log for monitoring                                         |
-| Segment re-route fails  | Route preserved at previous state            | Waypoint reverts (drag) or edit discarded (add/remove)     |
+| Failure                  | User message                                      | Server behavior                                                                          |
+| ------------------------ | ------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| LLM can't parse prompt   | "I couldn't understand that request..."           | Log raw prompt and LLM response                                                          |
+| Geocoding fails          | "I couldn't find that location..."                | Log the location string; tries simplified variants first                                 |
+| No route found           | "Couldn't generate a route in that area..."       | Log waypoints and engine response                                                        |
+| Routing engine timeout   | "Route generation timed out..."                   | 30-second timeout on GraphHopper calls                                                   |
+| Distance can't converge  | Return best attempt with a note                   | "Route is Xkm — couldn't exactly match your target of Ykm"                               |
+| LLM overloaded (529)     | "The AI service is temporarily busy..."           | Anthropic SDK retries up to 5× with exponential backoff                                  |
+| Routing rate limit (429) | "Routing service is getting too many requests..." | Retry up to 3× with exponential backoff (1s, 2s, 4s). `RateLimitError` after exhaustion. |
+| Routing quota exhausted  | "Roam has hit its daily routing limit..."         | Detects "credit"/"quota"/"daily" in 429 body → `QuotaExhaustedError` (no retry)          |
+| Segment re-route fails   | Route preserved at previous state                 | Waypoint reverts (drag) or edit discarded (add/remove)                                   |
 
 ---
 
